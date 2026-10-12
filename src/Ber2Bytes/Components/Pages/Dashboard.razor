@@ -1,0 +1,243 @@
+@page "/"
+@inherits AppPageBase
+@inject DashboardService DashboardSvc
+
+@if (Allowed)
+{
+    <PageHeader Title="@(Auth.IsAdmin ? "Admin Dashboard" : "Staff Dashboard")">
+        <Actions>
+            <span class="date-chip"><Icon Name="calendar" />@(DateTime.Today.ToString("dddd, MMMM d, yyyy"))</span>
+            <button class="btn ghost sm" title="Refresh" @onclick="Load"><Icon Name="refresh" /></button>
+        </Actions>
+    </PageHeader>
+
+    @if (_d == null)
+    {
+        <div class="empty"><p>Loading dashboard…</p></div>
+    }
+    else
+    {
+        <!-- ═══ STAT CARDS ═══ -->
+        <div class="stats">
+            <div class="card stat">
+                <div class="stat-ic"><Icon Name="box" /></div>
+                <div>
+                    <div class="stat-label">Total Products</div>
+                    <div class="stat-val">@(_d.TotalProducts.ToString("N0"))</div>
+                    <div class="stat-trend @(_d.ProductsAddedThisMonth > 0 ? "up" : "flat")">
+                        @if (_d.ProductsAddedThisMonth > 0) { <Icon Name="trending" /> }
+                        +@_d.ProductsAddedThisMonth
+                    </div>
+                    <div class="stat-sub">added this month</div>
+                </div>
+            </div>
+            <div class="card stat">
+                <div class="stat-ic"><Icon Name="boxes" /></div>
+                <div>
+                    <div class="stat-label">Total Inventory Items</div>
+                    <div class="stat-val">@(_d.TotalUnits.ToString("N0"))</div>
+                    @if (Auth.Can(Perm.ViewCost))
+                    {
+                        <div class="stat-trend flat">@Fmt.PesoShort(_d.InventoryValue)</div>
+                        <div class="stat-sub">stock value at cost</div>
+                    }
+                    else
+                    {
+                        <div class="stat-sub" style="margin-top:8px">units in stock</div>
+                    }
+                </div>
+            </div>
+            <div class="card stat">
+                <div class="stat-ic"><Icon Name="cart" /></div>
+                <div>
+                    <div class="stat-label">@(Auth.Can(Perm.SalesViewAll) ? "Today's Sales" : "My Sales Today")</div>
+                    <div class="stat-val">@(Fmt.Peso(_d.TodaySales).Replace(".00", ""))</div>
+                    @if (_d.ChangePercent is { } pct)
+                    {
+                        <div class="stat-trend @(pct >= 0 ? "up" : "down")">
+                            <Icon Name="@(pct >= 0 ? "trending" : "trending-down")" />@(pct >= 0 ? "+" : "")@pct%
+                        </div>
+                        <div class="stat-sub">vs. yesterday · @_d.TodayTransactions transaction(s)</div>
+                    }
+                    else
+                    {
+                        <div class="stat-trend flat">@_d.TodayTransactions transaction(s)</div>
+                        <div class="stat-sub">no sales yesterday to compare</div>
+                    }
+                </div>
+            </div>
+            <div class="card stat clickable" style="cursor:pointer" @onclick='() => Nav.NavigateTo("alerts")'>
+                <div class="stat-ic"><Icon Name="alert" /></div>
+                <div>
+                    <div class="stat-label">Low Stock Items</div>
+                    <div class="stat-val">@_d.LowStockCount</div>
+                    <div class="stat-trend @(_d.OutOfStockCount > 0 ? "down" : "flat")">@_d.OutOfStockCount out of stock</div>
+                    <div class="stat-sub">needs reordering</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ CHARTS ═══ -->
+        <div class="grid-4">
+            <div class="card">
+                <div class="card-head"><h3><Icon Name="calendar" />Daily Sales</h3><span class="spacer"></span><span class="badge gray">Last 7 days</span></div>
+                <div class="card-body"><BarChart Points="_d.Daily" /></div>
+            </div>
+            <div class="card">
+                <div class="card-head"><h3><Icon Name="calendar" />Weekly Sales</h3><span class="spacer"></span><span class="badge gray">Last 8 weeks</span></div>
+                <div class="card-body"><LineChart Points="_d.Weekly" /></div>
+            </div>
+            <div class="card">
+                <div class="card-head"><h3><Icon Name="chart" />Monthly Sales</h3><span class="spacer"></span><span class="badge gray">Last 6 months</span></div>
+                <div class="card-body"><BarChart Points="_d.Monthly" /></div>
+            </div>
+            <div class="card">
+                <div class="card-head"><h3><Icon Name="tag" />Sales by Category</h3><span class="spacer"></span><span class="badge gray">This month</span></div>
+                <div class="card-body"><HBarChart Points="_d.ByCategory" /></div>
+            </div>
+        </div>
+
+        <!-- ═══ TABLES ═══ -->
+        <div class="grid-4">
+            <div class="card">
+                <div class="card-head"><h3><Icon Name="cart" />Recent Sales</h3><span class="spacer"></span><a class="link" href="sales">View All</a></div>
+                <div class="tbl-wrap">
+                    <table class="compact">
+                        <thead><tr><th>Receipt</th><th>Time</th><th class="r">Total</th><th>Status</th></tr></thead>
+                        <tbody>
+                            @if (_d.RecentSales.Count == 0)
+                            {
+                                <TableEmptyRow Colspan="4" IconName="receipt" Title="No sales yet" Text="" />
+                            }
+                            @foreach (var s in _d.RecentSales)
+                            {
+                                <tr>
+                                    <td class="mono">@s.InvoiceNo</td>
+                                    <td class="nowrap small">@(s.Date.Date == DateTime.Today ? Fmt.Time(s.Date) : s.Date.ToString("MMM d"))</td>
+                                    <td class="r b nowrap">@Fmt.Peso(s.Total)</td>
+                                    <td><span class="badge green">Completed</span></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-head"><h3><Icon Name="alert" />Low Stock Products</h3><span class="spacer"></span><a class="link" href="reports?type=LowStock">Print list</a></div>
+                <div class="tbl-wrap">
+                    <table class="compact">
+                        <thead><tr><th>Product</th><th class="r">Stock</th><th class="r">Reorder</th><th>Status</th></tr></thead>
+                        <tbody>
+                            @if (_d.LowStock.Count == 0)
+                            {
+                                <TableEmptyRow Colspan="4" IconName="check" Title="All stock levels are healthy" Text="" />
+                            }
+                            @foreach (var p in _d.LowStock)
+                            {
+                                <tr>
+                                    <td><div class="li-name" style="max-width:180px" title="@p.Name">@p.Name</div></td>
+                                    <td class="r t-red">@p.Stock</td>
+                                    <td class="r">@p.ReorderLevel</td>
+                                    <td><StockBadge Stock="p.Stock" Reorder="p.ReorderLevel" /></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-head"><h3><Icon Name="flame" />Best-Selling Products</h3><span class="spacer"></span>
+                    @if (Auth.Can(Perm.ReportBusiness)) { <a class="link" href="reports?type=TopProducts">View All</a> }
+                </div>
+                <div class="tbl-wrap">
+                    <table class="compact">
+                        <thead><tr><th>Product</th><th class="r">Sold</th><th class="r">Revenue</th></tr></thead>
+                        <tbody>
+                            @if (_d.BestSellers.Count == 0)
+                            {
+                                <TableEmptyRow Colspan="3" IconName="chart" Title="No sales in the last 30 days" Text="" />
+                            }
+                            @foreach (var b in _d.BestSellers)
+                            {
+                                <tr>
+                                    <td><div class="li-name" style="max-width:180px" title="@b.Name">@b.Name</div></td>
+                                    <td class="r b">@b.Qty</td>
+                                    <td class="r nowrap">@Fmt.PesoShort(b.Revenue)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-head"><h3><Icon Name="clock" />Slow-Moving Products</h3><span class="spacer"></span>
+                    @if (Auth.Can(Perm.ReportBusiness)) { <a class="link" href="reports?type=SlowMoving">View All</a> }
+                </div>
+                <div class="tbl-wrap">
+                    <table class="compact">
+                        <thead><tr><th>Product</th><th class="r">Stock</th><th class="r">Days Idle</th></tr></thead>
+                        <tbody>
+                            @if (_d.SlowMoving.Count == 0)
+                            {
+                                <TableEmptyRow Colspan="3" IconName="check" Title="Everything is selling" Text="" />
+                            }
+                            @foreach (var x in _d.SlowMoving)
+                            {
+                                <tr>
+                                    <td>
+                                        <div class="li-name" style="max-width:170px" title="@x.Product.Name">@x.Product.Name</div>
+                                        <span class="badge @(x.IsDead ? "red" : "amber")" style="font-size:10px;padding:1px 7px">@(x.IsDead ? "Dead stock" : "Slow")</span>
+                                    </td>
+                                    <td class="r">@x.Product.Stock</td>
+                                    <td class="r b">@(x.DaysSinceLastSale?.ToString() ?? "Never")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ QUICK ACTIONS ═══ -->
+        <div class="grid-4" style="margin-bottom:0">
+            @foreach (var q in QuickActions.Where(q => Auth.Can(q.Perm)))
+            {
+                <div class="card quick" @onclick="() => Nav.NavigateTo(q.Href)">
+                    <div class="stat-ic" style="width:52px;height:52px"><Icon Name="@q.Icon" /></div>
+                    <div><h4>@q.Title</h4><p>@q.Text</p></div>
+                    <Icon Name="chevron-right" />
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    protected override string? Permission => Perm.Dashboard;
+    private DashboardData? _d;
+
+    private record QuickAction(string Title, string Text, string Icon, string Href, string Perm);
+    private static readonly QuickAction[] QuickActions =
+    [
+        new("Process Sales", "Open the point of sale and print receipts", "cart", "pos", Perm.Pos),
+        new("Manage Products", "Add, edit or archive products", "box", "products", Perm.ProductsView),
+        new("Receive Stock", "Record deliveries from suppliers", "boxes", "inventory", Perm.StockIn),
+        new("View Reports", "Sales, best sellers, dead stock and more", "chart", "reports", Perm.Reports),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Allowed) return;
+        await Load();
+    }
+
+    private async Task Load()
+    {
+        try { _d = await DashboardSvc.LoadAsync(); }
+        catch (Exception ex)
+        {
+            AppLog.Error("Dashboard load failed", ex);
+            Toast.Error("Could not load the dashboard: " + ex.Message);
+        }
+    }
+}

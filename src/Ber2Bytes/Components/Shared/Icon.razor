@@ -1,0 +1,8 @@
+@* Draws an icon from the SVG sprite in wwwroot/index.html, e.g. <Icon Name="cart" /> *@
+<svg class="i @Class" style="@Style"><use href="#i-@Name"></use></svg>
+
+@code {
+    [Parameter, EditorRequired] public string Name { get; set; } = "";
+    [Parameter] public string? Class { get; set; }
+    [Parameter] public string? Style { get; set; }
+}

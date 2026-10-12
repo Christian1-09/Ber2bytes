@@ -1,0 +1,259 @@
+@inherits LayoutComponentBase
+@implements IAsyncDisposable
+@inject AuthService Auth
+@inject NavigationManager Nav
+@inject AppState State
+@inject AlertService Alerts
+@inject SettingsService Settings
+@inject LocalPrefs Prefs
+@inject PosCart Cart
+@inject ConfirmService Confirm
+@inject ToastService Toast
+@inject HotkeyService Hotkeys
+@inject IJSRuntime JS
+
+@if (Auth.IsLoggedIn)
+{
+    <div class="shell @(Prefs.SidebarCollapsed ? "collapsed" : "")">
+        <!-- ═══ SIDEBAR ═══ -->
+        <aside class="sidebar">
+            <div class="sb-logo">
+                <div class="full"><BrandLogo Size="side" OnDark="true" /></div>
+                <div class="mini text-logo side on-dark"><span class="word"><span class="two">2</span></span></div>
+            </div>
+            <nav class="sb-nav">
+                @foreach (var item in VisibleNav)
+                {
+                    if (item.Section != null)
+                    {
+                        <div class="sb-section">@item.Section</div>
+                    }
+                    <NavLink class="sb-item" ActiveClass="active" href="@item.Href" Match="@(item.Href == "" ? NavLinkMatch.All : NavLinkMatch.Prefix)" title="@item.Text">
+                        <Icon Name="@item.Icon" />
+                        <span>@item.Text</span>
+                        @{ var badge = BadgeFor(item.Href); }
+                        @if (badge > 0)
+                        {
+                            <span class="sb-badge @(item.Href == "products" ? "amber" : "")">@badge</span>
+                        }
+                    </NavLink>
+                }
+                <div class="sb-divider"></div>
+                <a class="sb-item" @onclick="Logout" title="Logout"><Icon Name="logout" /><span>Logout</span></a>
+            </nav>
+            <div class="sb-footer">
+                <b>BER2BYTES</b>
+                Computer Parts &amp; Accessories<br />
+                @Settings.Current.BranchName
+            </div>
+        </aside>
+
+        <!-- ═══ MAIN ═══ -->
+        <div class="main">
+            <header class="topbar">
+                <button class="icon-btn" title="Show / hide menu" @onclick="ToggleSidebar"><Icon Name="menu" /></button>
+                <div class="global-search">
+                    <Icon Name="search" />
+                    <input id="global-search" placeholder="Search products, SKU, barcode or OR number…" @bind="_search" @bind:event="oninput" @onkeydown="SearchKey" autocomplete="off" />
+                    <span class="kbd">Ctrl+K</span>
+                </div>
+                <span class="offline-pill" title="All data is saved on this computer"><Icon Name="database" />Offline</span>
+                @if (Auth.Can(Perm.Alerts))
+                {
+                    <button class="icon-btn" title="Alerts" @onclick='() => Nav.NavigateTo("alerts")'>
+                        <Icon Name="bell" />
+                        @if (_alertCount > 0)
+                        {
+                            <span class="dot">@(_alertCount > 99 ? "99+" : _alertCount.ToString())</span>
+                        }
+                    </button>
+                }
+                <div class="user-menu">
+                    <button class="user-btn" @onclick="() => _menuOpen = !_menuOpen">
+                        <div class="avatar">@Fmt.Initials(Auth.UserName)</div>
+                        <div>
+                            <div class="user-name">@Auth.UserName</div>
+                            <div class="user-role">@(Auth.IsAdmin ? "Administrator" : "Staff")</div>
+                        </div>
+                        <Icon Name="chevron-down" Class="sm" />
+                    </button>
+                    @if (_menuOpen)
+                    {
+                        <div class="click-catcher" @onclick="() => _menuOpen = false"></div>
+                        <div class="dropdown">
+                            <button @onclick="OpenChangePassword"><Icon Name="key" />Change my password</button>
+                            @if (Auth.Can(Perm.Settings))
+                            {
+                                <button @onclick='() => { _menuOpen = false; Nav.NavigateTo("settings"); }'><Icon Name="gear" />Settings</button>
+                            }
+                            <hr />
+                            <button class="danger" @onclick="Logout"><Icon Name="logout" />Sign out</button>
+                        </div>
+                    }
+                </div>
+            </header>
+
+            <main class="content" id="content">
+                @Body
+            </main>
+        </div>
+    </div>
+
+    @if (_showPw)
+    {
+        <Modal Title="Change My Password" Icon="key" Size="sm" OnClose="() => _showPw = false">
+            <ChildContent>
+                @if (_pwError != null)
+                {
+                    <div class="form-error"><Icon Name="alert-circle" />@_pwError</div>
+                }
+                <div class="form-grid">
+                    <div class="fg full"><label>Current password</label><input type="password" @bind="_pwCurrent" /></div>
+                    <div class="fg full"><label>New password</label><input type="password" @bind="_pwNew" /><span class="hint">At least 6 characters</span></div>
+                    <div class="fg full"><label>Confirm new password</label><input type="password" @bind="_pwConfirm" /></div>
+                </div>
+            </ChildContent>
+            <Footer>
+                <button class="btn ghost" @onclick="() => _showPw = false">Cancel</button>
+                <button class="btn primary" @onclick="SavePassword"><Icon Name="check" />Save Password</button>
+            </Footer>
+        </Modal>
+    }
+}
+
+<Toasts />
+<ConfirmHost />
+
+@code {
+    private record NavItem(string Href, string Text, string Icon, string Perm, string? Section = null);
+
+    // Sidebar menu. Each item only shows when the role has the permission.
+    private static readonly NavItem[] Nav_ =
+    [
+        new("", "Dashboard", "home", Perm.Dashboard),
+        new("pos", "Point of Sale", "cart", Perm.Pos),
+        new("products", "Products", "box", Perm.ProductsView),
+        new("inventory", "Inventory", "boxes", Perm.StockView),
+        new("sales", "Sales", "receipt", Perm.SalesView),
+        new("suppliers", "Suppliers", "truck", Perm.SuppliersView),
+        new("categories", "Categories", "tag", Perm.Categories),
+        new("returns", "Returns", "undo", Perm.Returns),
+        new("reports", "Reports & Analytics", "chart", Perm.Reports),
+        new("alerts", "Alerts", "bell", Perm.Alerts),
+        new("users", "User Management", "users", Perm.Users, "Administration"),
+        new("activity", "Activity Log", "log", Perm.Audit),
+        new("settings", "Settings", "gear", Perm.Settings),
+    ];
+
+    private IEnumerable<NavItem> VisibleNav => Nav_.Where(n => Auth.Can(n.Perm));
+
+    private string _search = "";
+    private bool _menuOpen;
+    private int _alertCount, _lowCount, _pendingReturns;
+    private DotNetObjectReference<HotkeyService>? _hotkeyRef;
+
+    private bool _showPw;
+    private string _pwCurrent = "", _pwNew = "", _pwConfirm = "";
+    private string? _pwError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        State.DataChanged += OnDataChanged;
+        Auth.Changed += OnAuthChanged;
+        if (!Auth.IsLoggedIn)
+        {
+            Nav.NavigateTo("/login");
+            return;
+        }
+        await RefreshCounts();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _hotkeyRef = DotNetObjectReference.Create(Hotkeys);
+            await JS.InvokeVoidAsync("b2b.registerHotkeys", _hotkeyRef);
+        }
+    }
+
+    private int BadgeFor(string href) => href switch
+    {
+        "products" => _lowCount,
+        "returns" => _pendingReturns,
+        _ => 0
+    };
+
+    private async Task RefreshCounts()
+    {
+        if (!Auth.IsLoggedIn) return;
+        (_alertCount, _lowCount, _pendingReturns) = await Alerts.CountsAsync();
+    }
+
+    private void OnDataChanged() => InvokeAsync(async () =>
+    {
+        await RefreshCounts();
+        StateHasChanged();
+    });
+
+    private void OnAuthChanged() => InvokeAsync(StateHasChanged);
+
+    private void ToggleSidebar()
+    {
+        Prefs.SidebarCollapsed = !Prefs.SidebarCollapsed;
+        Prefs.Save();
+    }
+
+    private void SearchKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") { _search = ""; return; }
+        if (e.Key != "Enter" || string.IsNullOrWhiteSpace(_search)) return;
+        var q = _search.Trim();
+        _search = "";
+        bool looksLikeReceipt = q.StartsWith("OR-", StringComparison.OrdinalIgnoreCase);
+        if (looksLikeReceipt && Auth.Can(Perm.SalesView))
+            Nav.NavigateTo($"sales?q={Uri.EscapeDataString(q)}");
+        else
+            Nav.NavigateTo($"products?q={Uri.EscapeDataString(q)}");
+    }
+
+    private void OpenChangePassword()
+    {
+        _menuOpen = false;
+        _pwCurrent = _pwNew = _pwConfirm = "";
+        _pwError = null;
+        _showPw = true;
+    }
+
+    private async Task SavePassword()
+    {
+        if (_pwNew != _pwConfirm) { _pwError = "The new passwords do not match."; return; }
+        _pwError = await Auth.ChangeOwnPasswordAsync(_pwCurrent, _pwNew);
+        if (_pwError == null)
+        {
+            _showPw = false;
+            Toast.Success("Your password was changed.");
+        }
+    }
+
+    private async Task Logout()
+    {
+        _menuOpen = false;
+        var msg = Cart.Lines.Count > 0 || Cart.Held.Count > 0
+            ? "The current cart and held sales will be cleared."
+            : "You will return to the sign-in screen.";
+        if (!await Confirm.Ask("Sign out?", msg, "Sign out", danger: false)) return;
+        Cart.ClearAll();
+        await Auth.LogoutAsync();
+        Nav.NavigateTo("/login");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        State.DataChanged -= OnDataChanged;
+        Auth.Changed -= OnAuthChanged;
+        try { await JS.InvokeVoidAsync("b2b.unregisterHotkeys"); }
+        catch (JSDisconnectedException) { /* app is closing */ }
+        _hotkeyRef?.Dispose();
+    }
+}

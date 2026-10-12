@@ -1,0 +1,134 @@
+@page "/suppliers"
+@inherits AppPageBase
+@inject CatalogService Catalog
+
+@if (Allowed)
+{
+    <PageHeader Title="Suppliers" Subtitle="Where you buy your stock. Print a reorder list per supplier with the printer button.">
+        <Actions>
+            @if (Auth.Can(Perm.SuppliersManage))
+            {
+                <button class="btn primary" @onclick="() => Open(null)"><Icon Name="plus" />Add Supplier</button>
+            }
+        </Actions>
+    </PageHeader>
+
+    <div class="toolbar">
+        <div class="search-box"><Icon Name="search" /><input placeholder="Search supplier or contact…" @bind="_search" @bind:event="oninput" @bind:after="Load" /></div>
+        <span class="spacer"></span>
+        <span class="count-note">@_rows.Count supplier(s)</span>
+    </div>
+
+    <div class="tbl-card">
+        <table>
+            <thead><tr><th>Supplier</th><th>Contact Person</th><th>Phone</th><th>Terms</th><th class="r">Products</th><th>Low Stock</th><th>Last Delivery</th><th></th></tr></thead>
+            <tbody>
+                @if (_rows.Count == 0)
+                {
+                    <TableEmptyRow Colspan="8" IconName="truck" Title="No suppliers found" />
+                }
+                @foreach (var r in _rows)
+                {
+                    var s = r.Supplier;
+                    <tr>
+                        <td><div class="prod-name">@s.Name</div><div class="muted small">@(string.Join(" · ", new[] { s.Email, s.Address }.Where(x => !string.IsNullOrWhiteSpace(x))))</div></td>
+                        <td>@(s.ContactPerson ?? "—")</td>
+                        <td class="mono">@(s.Phone ?? "—")</td>
+                        <td>@s.PaymentTerms</td>
+                        <td class="r">@r.ProductCount</td>
+                        <td>
+                            @if (r.LowCount > 0) { <span class="badge amber">@r.LowCount item(s)</span> }
+                            else { <span class="badge green">OK</span> }
+                        </td>
+                        <td class="muted small">@Fmt.Date(s.LastDeliveryAt)</td>
+                        <td>
+                            <div class="acts">
+                                <a class="act" title="Low stock list for this supplier (PDF / Excel)" href="@($"reports?type=LowStock&supplier={s.Id}")"><Icon Name="printer" /></a>
+                                <a class="act" title="View products" href="@($"products?supplier={s.Id}")"><Icon Name="eye" /></a>
+                                @if (Auth.Can(Perm.SuppliersManage))
+                                {
+                                    <button class="act edit" title="Edit" @onclick="() => Open(s)"><Icon Name="edit" /></button>
+                                    <button class="act del" title="Delete" @onclick="() => Delete(r)"><Icon Name="trash" /></button>
+                                }
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    @if (_form != null)
+    {
+        <Modal Title="@(_form.Id == 0 ? "Add Supplier" : "Edit Supplier")" Icon="truck" OnClose="() => _form = null">
+            <ChildContent>
+                @if (_error != null)
+                {
+                    <div class="form-error"><Icon Name="alert-circle" />@_error</div>
+                }
+                <div class="form-grid">
+                    <div class="fg full"><label>Supplier Name <span class="req">*</span></label><input @bind="_form.Name" /></div>
+                    <div class="fg"><label>Contact Person</label><input @bind="_form.ContactPerson" /></div>
+                    <div class="fg"><label>Phone</label><input placeholder="09XX-XXX-XXXX" @bind="_form.Phone" /></div>
+                    <div class="fg"><label>Email</label><input type="email" @bind="_form.Email" /></div>
+                    <div class="fg">
+                        <label>Payment Terms</label>
+                        <select @bind="_form.PaymentTerms">
+                            @foreach (var t in Terms) { <option value="@t">@t</option> }
+                        </select>
+                    </div>
+                    <div class="fg full"><label>Address</label><input @bind="_form.Address" /></div>
+                </div>
+            </ChildContent>
+            <Footer>
+                <button class="btn ghost" @onclick="() => _form = null">Cancel</button>
+                <button class="btn primary" @onclick="Save"><Icon Name="check" />Save Supplier</button>
+            </Footer>
+        </Modal>
+    }
+}
+
+@code {
+    protected override string? Permission => Perm.SuppliersView;
+    private static readonly string[] Terms = ["COD", "7 days", "15 days", "30 days", "60 days"];
+
+    private List<CatalogService.SupplierRow> _rows = [];
+    private string? _search;
+    private Supplier? _form;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Allowed) return;
+        await Load();
+    }
+
+    private async Task Load() => _rows = await Catalog.GetSuppliersWithCountsAsync(_search);
+
+    private void Open(Supplier? s)
+    {
+        _error = null;
+        _form = s == null ? new Supplier() : new Supplier
+        {
+            Id = s.Id, Name = s.Name, ContactPerson = s.ContactPerson, Phone = s.Phone, Email = s.Email, Address = s.Address, PaymentTerms = s.PaymentTerms
+        };
+    }
+
+    private async Task Save()
+    {
+        if (_form == null) return;
+        _error = await Catalog.SaveSupplierAsync(_form);
+        if (_error != null) return;
+        Toast.Success($"Supplier \"{_form.Name}\" saved.");
+        _form = null;
+        await Load();
+    }
+
+    private async Task Delete(CatalogService.SupplierRow r)
+    {
+        var msg = r.ProductCount > 0 ? $"{r.ProductCount} product(s) will be left without a supplier." : "This cannot be undone.";
+        if (!await Confirm.Ask($"Delete \"{r.Supplier.Name}\"?", msg, "Delete")) return;
+        if (Ok(await Catalog.DeleteSupplierAsync(r.Supplier.Id), "Supplier deleted."))
+            await Load();
+    }
+}

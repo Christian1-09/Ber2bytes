@@ -1,0 +1,178 @@
+@page "/sales"
+@inherits AppPageBase
+@inject SalesService SalesSvc
+@inject IJSRuntime JS
+
+@if (Allowed)
+{
+    <PageHeader Title="Sales" Subtitle="@(Auth.Can(Perm.SalesViewAll) ? "All sales transactions" : "Sales you processed")">
+        <Actions>
+            <a class="btn primary" href="pos"><Icon Name="cart" />New Sale</a>
+        </Actions>
+    </PageHeader>
+
+    @if (!Auth.Can(Perm.SalesViewAll))
+    {
+        <div class="note"><Icon Name="info" />You can see only the sales you processed. Ask an administrator to void a sale.</div>
+    }
+
+    <div class="toolbar">
+        <div class="search-box"><Icon Name="search" /><input placeholder="Search OR no., customer or GCash ref…" @bind="_q.Search" @bind:event="oninput" @bind:after="Load" /></div>
+        <select @bind="_range" @bind:after="RangeChanged">
+            <option value="today">Today</option>
+            <option value="7">Last 7 days</option>
+            <option value="30">Last 30 days</option>
+            <option value="month">This month</option>
+            <option value="all">All time</option>
+            <option value="custom">Custom range…</option>
+        </select>
+        @if (_range == "custom")
+        {
+            <label>From</label><input type="date" @bind="_q.From" @bind:after="Load" />
+            <label>To</label><input type="date" @bind="_q.To" @bind:after="Load" />
+        }
+        <select @bind="_q.Method" @bind:after="Load">
+            <option value="">All payments</option>
+            <option value="@PaymentMethod.Cash">Cash</option>
+            <option value="@PaymentMethod.GCash">GCash</option>
+        </select>
+        <select @bind="_q.Status" @bind:after="Load">
+            <option value="">All status</option>
+            <option value="@SaleStatus.Completed">Completed</option>
+            <option value="@SaleStatus.Voided">Voided</option>
+        </select>
+    </div>
+
+    <div class="chips">
+        <div class="chip"><div class="chip-l">Transactions</div><div class="chip-v">@Done.Count</div></div>
+        <div class="chip"><div class="chip-l">Total sales</div><div class="chip-v">@(Fmt.Peso(Done.Sum(s => s.Total)))</div></div>
+        <div class="chip"><div class="chip-l">Average sale</div><div class="chip-v">@(Fmt.Peso(Done.Count == 0 ? 0 : Done.Sum(s => s.Total) / Done.Count))</div></div>
+        <div class="chip"><div class="chip-l">Items sold</div><div class="chip-v">@(Done.Sum(s => s.Items.Sum(i => i.Quantity)))</div></div>
+        <div class="chip"><div class="chip-l">Cash / GCash</div><div class="chip-v" style="font-size:15px">@(Fmt.PesoShort(Done.Where(s => s.PaymentMethod == PaymentMethod.Cash).Sum(s => s.Total))) / @(Fmt.PesoShort(Done.Where(s => s.PaymentMethod == PaymentMethod.GCash).Sum(s => s.Total)))</div></div>
+        @if (Auth.Can(Perm.ViewCost))
+        {
+            <div class="chip"><div class="chip-l">Gross profit</div><div class="chip-v" style="color:var(--green)">@(Fmt.Peso(Done.Sum(s => s.Items.Sum(i => (i.UnitPrice - i.UnitCost) * i.Quantity) - s.Discount)))</div></div>
+        }
+        <div class="chip"><div class="chip-l">Voided</div><div class="chip-v">@(_list.Count - Done.Count)</div></div>
+    </div>
+
+    <div class="tbl-card">
+        <table>
+            <thead><tr><th>OR No.</th><th>Date &amp; Time</th><th>Customer</th><th class="r">Items</th><th>Payment</th><th class="r">Discount</th><th class="r">Total</th><th>Cashier</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+                @if (_list.Count == 0)
+                {
+                    <TableEmptyRow Colspan="10" IconName="receipt" Title="No sales found" Text="Try a different date range." />
+                }
+                @foreach (var s in _list)
+                {
+                    <tr class="clickable @(s.Status == SaleStatus.Voided ? "voided" : "")" @onclick="() => _receipt = s">
+                        <td class="mono b">@s.InvoiceNo</td>
+                        <td class="nowrap">@Fmt.DateTimeText(s.Date)</td>
+                        <td>@s.CustomerName</td>
+                        <td class="r">@(s.Items.Sum(i => i.Quantity))</td>
+                        <td><span class="badge @(s.PaymentMethod == PaymentMethod.Cash ? "green" : "blue")">@s.PaymentMethod</span></td>
+                        <td class="r mono">@(s.Discount > 0 ? Fmt.Peso(s.Discount) : "—")</td>
+                        <td class="r mono b">@Fmt.Peso(s.Total)</td>
+                        <td>@s.Cashier?.FullName</td>
+                        <td><span class="badge @(s.Status == SaleStatus.Completed ? "green" : "red")" title="@s.VoidReason">@s.Status</span></td>
+                        <td @onclick:stopPropagation="true">
+                            <div class="acts">
+                                <button class="act" title="View / reprint receipt" @onclick="() => _receipt = s"><Icon Name="receipt" /></button>
+                                @if (Auth.Can(Perm.SalesVoid) && s.Status == SaleStatus.Completed)
+                                {
+                                    <button class="act del" title="Void sale" @onclick="() => Void(s)"><Icon Name="ban" /></button>
+                                }
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    @if (_receipt != null)
+    {
+        <Modal Title="@($"Receipt {_receipt.InvoiceNo}")" Icon="receipt" Size="sm" OnClose="() => _receipt = null" BodyStyle="background:var(--g100)">
+            <ChildContent>
+                @if (_receipt.Status == SaleStatus.Voided)
+                {
+                    <div class="note danger"><Icon Name="ban" />Voided @Fmt.DateTimeText(_receipt.VoidedAt) — @_receipt.VoidReason</div>
+                }
+                @((MarkupString)ReceiptBuilder.Build(_receipt, Settings.Current))
+            </ChildContent>
+            <Footer>
+                @if (Auth.Can(Perm.Returns) && _receipt.Status == SaleStatus.Completed)
+                {
+                    <a class="btn ghost" href="@($"returns?or={_receipt.InvoiceNo}")"><Icon Name="undo" />Return item</a>
+                }
+                <span class="spacer"></span>
+                <button class="btn ghost" @onclick="() => _receipt = null">Close</button>
+                <button class="btn primary" @onclick="Reprint"><Icon Name="printer" />Reprint</button>
+            </Footer>
+        </Modal>
+    }
+}
+
+@code {
+    protected override string? Permission => Perm.SalesView;
+
+    [SupplyParameterFromQuery(Name = "q")] public string? SearchFromUrl { get; set; }
+
+    private readonly SalesQuery _q = new();
+    private string _range = "7";
+    private List<Sale> _list = [];
+    private Sale? _receipt;
+
+    private List<Sale> Done => _list.Where(s => s.Status == SaleStatus.Completed).ToList();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!Allowed) return;
+        if (!string.IsNullOrWhiteSpace(SearchFromUrl))
+        {
+            _q.Search = SearchFromUrl;
+            _range = "all";
+        }
+        ApplyRange();
+        await Load();
+    }
+
+    private void ApplyRange()
+    {
+        var today = DateTime.Today;
+        switch (_range)
+        {
+            case "today": _q.From = today; _q.To = today; break;
+            case "7": _q.From = today.AddDays(-6); _q.To = today; break;
+            case "30": _q.From = today.AddDays(-29); _q.To = today; break;
+            case "month": _q.From = new DateTime(today.Year, today.Month, 1); _q.To = today; break;
+            case "all": _q.From = null; _q.To = null; break;
+            default: _q.From ??= today.AddDays(-6); _q.To ??= today; break;
+        }
+    }
+
+    private async Task RangeChanged()
+    {
+        ApplyRange();
+        await Load();
+    }
+
+    private async Task Load() => _list = await SalesSvc.SearchAsync(_q);
+
+    private async Task Reprint()
+    {
+        if (_receipt == null) return;
+        await JS.InvokeVoidAsync("b2b.printHtml", _receipt.InvoiceNo, ReceiptBuilder.Build(_receipt, Settings.Current, Auth.UserName), ReceiptBuilder.PrintCss);
+    }
+
+    private async Task Void(Sale s)
+    {
+        var reason = await Confirm.AskText($"Void sale {s.InvoiceNo}?",
+            $"{Fmt.Peso(s.Total)} will be cancelled and the items go back to stock. This cannot be undone.",
+            "Reason for voiding (required)", "Void Sale");
+        if (reason == null) return;
+        if (Ok(await SalesSvc.VoidAsync(s.Id, reason), $"{s.InvoiceNo} was voided."))
+            await Load();
+    }
+}

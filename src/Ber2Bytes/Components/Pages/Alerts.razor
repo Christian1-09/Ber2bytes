@@ -1,0 +1,60 @@
+@page "/alerts"
+@inherits AppPageBase
+@inject AlertService AlertsSvc
+
+@if (Allowed)
+{
+    <PageHeader Title="Alerts" Subtitle="Things that need your attention">
+        <Actions>
+            @if (_items.Any(a => a.ProductId != null))
+            {
+                <a class="btn ghost" href="reports?type=LowStock"><Icon Name="printer" />Print low stock list for suppliers</a>
+            }
+            <button class="btn ghost" title="Refresh" @onclick="Load"><Icon Name="refresh" /></button>
+        </Actions>
+    </PageHeader>
+
+    @if (_items.Count == 0)
+    {
+        <div class="card"><EmptyState IconName="bell" Title="No active alerts" Text="Everything looks good." /></div>
+    }
+    @foreach (var a in _items)
+    {
+        <div class="alert @a.Level">
+            <Icon Name="@a.Icon" />
+            <div style="flex:1">
+                <div class="alert-title">@a.Title</div>
+                <div class="alert-desc">@a.Description</div>
+            </div>
+            @if (a.ActionText != null)
+            {
+                <button class="btn ghost sm" @onclick="() => Act(a)">@a.ActionText</button>
+            }
+        </div>
+    }
+
+    @if (_stockInFor != null)
+    {
+        <StockInDialog ProductId="_stockInFor" OnClose="() => _stockInFor = null" OnSaved="Load" />
+    }
+}
+
+@code {
+    protected override string? Permission => Perm.Alerts;
+    private List<AlertItem> _items = [];
+    private int? _stockInFor;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Allowed) return;
+        await Load();
+    }
+
+    private async Task Load() => _items = await AlertsSvc.GetAsync();
+
+    private void Act(AlertItem a)
+    {
+        if (a.ActionUrl != null) Nav.NavigateTo(a.ActionUrl);
+        else if (a.ProductId != null) _stockInFor = a.ProductId;
+    }
+}

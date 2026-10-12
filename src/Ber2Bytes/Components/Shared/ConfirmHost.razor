@@ -1,0 +1,98 @@
+@implements IDisposable
+@inject ConfirmService Confirm
+@inject HotkeyService Hotkeys
+@inject IJSRuntime JS
+
+@if (Confirm.Current is { } c)
+{
+    <div class="overlay" style="z-index:2000">
+        <div class="modal sm">
+            <div class="modal-body" style="text-align:center;padding:28px 26px 12px">
+                <div class="confirm-ic @(c.Danger ? "" : "info")"><Icon Name="@(c.Danger ? "alert" : "info")" /></div>
+                <h3 style="font-size:17px;margin-bottom:8px">@c.Title</h3>
+                <p class="muted" style="font-size:13.5px;line-height:1.55;white-space:pre-line">@c.Message</p>
+
+                @if (c.InputLabel != null)
+                {
+                    <div class="fg" style="text-align:left;margin-top:16px">
+                        <label>@c.InputLabel</label>
+                        <input id="confirm-input" type="@(c.InputIsPassword ? "password" : "text")" @bind="_text" @bind:event="oninput" @onkeydown="Key" autocomplete="off" />
+                    </div>
+                }
+                @if (c.TypeToConfirm != null)
+                {
+                    <div class="fg" style="text-align:left;margin-top:16px">
+                        <label>Type <b>@c.TypeToConfirm</b> to confirm</label>
+                        <input id="confirm-input" @bind="_text" @bind:event="oninput" autocomplete="off" />
+                    </div>
+                }
+            </div>
+            <div class="modal-foot" style="justify-content:center;background:#fff;border-top:none;padding-bottom:22px">
+                <button class="btn ghost" @onclick="Cancel">Cancel</button>
+                <button id="confirm-ok" class="btn @(c.Danger ? "primary" : "dark")" disabled="@(!CanOk(c))" @onclick="Ok">@c.OkText</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private string _text = "";
+    private IDisposable? _sub;
+    private ConfirmRequest? _shown;
+
+    protected override void OnInitialized()
+    {
+        Confirm.Changed += Refresh;
+        _sub = Hotkeys.Subscribe(e =>
+        {
+            if (Confirm.Current == null) return Task.CompletedTask;
+            e.Handled = true;
+            if (e.Key == "Escape") InvokeAsync(Cancel);
+            return Task.CompletedTask;
+        }, priority: 100);
+    }
+
+    private void Refresh() => InvokeAsync(() =>
+    {
+        if (Confirm.Current != _shown) _text = "";
+        StateHasChanged();
+    });
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Confirm.Current != null && Confirm.Current != _shown)
+        {
+            _shown = Confirm.Current;
+            bool hasInput = _shown.InputLabel != null || _shown.TypeToConfirm != null;
+            await JS.InvokeVoidAsync("b2b.focus", hasInput ? "confirm-input" : "confirm-ok");
+        }
+        else if (Confirm.Current == null) _shown = null;
+    }
+
+    private bool CanOk(ConfirmRequest c)
+    {
+        if (c.TypeToConfirm != null) return _text.Trim() == c.TypeToConfirm;
+        if (c.InputLabel != null) return _text.Trim().Length > 0;
+        return true;
+    }
+
+    private void Ok()
+    {
+        var c = Confirm.Current;
+        if (c == null || !CanOk(c)) return;
+        Confirm.Close(c.InputLabel != null ? (c.InputIsPassword ? _text : _text.Trim()) : "ok");
+    }
+
+    private void Cancel() => Confirm.Close(null);
+
+    private void Key(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") Ok();
+    }
+
+    public void Dispose()
+    {
+        Confirm.Changed -= Refresh;
+        _sub?.Dispose();
+    }
+}

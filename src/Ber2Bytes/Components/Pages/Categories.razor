@@ -1,0 +1,122 @@
+@page "/categories"
+@inherits AppPageBase
+@inject CatalogService Catalog
+
+@if (Allowed)
+{
+    <PageHeader Title="Categories" Subtitle="Group your products (laptops, processors, RAM, …)">
+        <Actions>
+            <button class="btn primary" @onclick="() => Open(null)"><Icon Name="plus" />Add Category</button>
+        </Actions>
+    </PageHeader>
+
+    @if (_rows.Count == 0)
+    {
+        <div class="card"><EmptyState IconName="tag" Title="No categories yet" Text="Add your first category to start adding products." /></div>
+    }
+    <div class="cat-grid">
+        @foreach (var (c, count, low) in _rows)
+        {
+            <div class="card cat-card">
+                <div class="cat-ic" style="background:@c.Color"><Icon Name="@c.Icon" /></div>
+                <div style="flex:1;min-width:0">
+                    <h4 style="font-size:15px">@c.Name</h4>
+                    <p class="muted small" style="margin:3px 0 10px">@(c.Description ?? "—")</p>
+                    <span class="badge dark">@count product(s)</span>
+                    @if (low > 0) { <span class="badge amber">@low low stock</span> }
+                </div>
+                <div class="acts">
+                    <a class="act" title="View products" href="@($"products?cat={c.Id}")"><Icon Name="eye" /></a>
+                    <button class="act edit" title="Edit" @onclick="() => Open(c)"><Icon Name="edit" /></button>
+                    <button class="act del" title="Delete" @onclick="() => Delete(c)"><Icon Name="trash" /></button>
+                </div>
+            </div>
+        }
+    </div>
+
+    @if (_form != null)
+    {
+        <Modal Title="@(_form.Id == 0 ? "Add Category" : "Edit Category")" Icon="tag" OnClose="() => _form = null">
+            <ChildContent>
+                @if (_error != null)
+                {
+                    <div class="form-error"><Icon Name="alert-circle" />@_error</div>
+                }
+                <div class="form-grid">
+                    <div class="fg full"><label>Category Name <span class="req">*</span></label><input @bind="_form.Name" placeholder="e.g. Graphics Cards" /></div>
+                    <div class="fg full"><label>Description</label><textarea @bind="_form.Description" placeholder="Optional"></textarea></div>
+                    <div class="fg full">
+                        <label>Icon</label>
+                        <div class="icon-pick">
+                            @foreach (var i in Icons)
+                            {
+                                <button type="button" class="@(_form.Icon == i ? "on" : "")" title="@i" @onclick="() => _form.Icon = i"><Icon Name="@i" /></button>
+                            }
+                        </div>
+                    </div>
+                    <div class="fg full">
+                        <label>Color</label>
+                        <div class="color-pick">
+                            @foreach (var col in Colors)
+                            {
+                                <button type="button" class="@(_form.Color == col ? "on" : "")" style="background:@col" title="@col" @onclick="() => _form.Color = col"></button>
+                            }
+                        </div>
+                    </div>
+                    <div class="fg full">
+                        <label>Preview</label>
+                        <div class="row"><div class="cat-ic" style="background:@_form.Color"><Icon Name="@_form.Icon" /></div><b>@(string.IsNullOrWhiteSpace(_form.Name) ? "Category name" : _form.Name)</b></div>
+                    </div>
+                </div>
+            </ChildContent>
+            <Footer>
+                <button class="btn ghost" @onclick="() => _form = null">Cancel</button>
+                <button class="btn primary" @onclick="Save"><Icon Name="check" />Save</button>
+            </Footer>
+        </Modal>
+    }
+}
+
+@code {
+    protected override string? Permission => Perm.Categories;
+
+    private static readonly string[] Icons = ["laptop", "cpu", "gpu", "ram", "hdd", "board", "monitor", "keyboard", "mouse", "headphones", "wifi", "power", "printer2", "box", "tag", "phone"];
+    private static readonly string[] Colors = ["#E11D2A", "#B91C1C", "#7F1D1D", "#111111", "#374151", "#6B7280", "#DC2626", "#EF4444", "#1F2937", "#991B1B", "#2563EB", "#16A34A"];
+
+    private List<(Category Category, int ProductCount, int LowCount)> _rows = [];
+    private Category? _form;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Allowed) return;
+        await Load();
+    }
+
+    private async Task Load() => _rows = await Catalog.GetCategoriesWithCountsAsync();
+
+    private void Open(Category? c)
+    {
+        _error = null;
+        _form = c == null
+            ? new Category { Icon = "box", Color = "#E11D2A" }
+            : new Category { Id = c.Id, Name = c.Name, Description = c.Description, Icon = c.Icon, Color = c.Color };
+    }
+
+    private async Task Save()
+    {
+        if (_form == null) return;
+        _error = await Catalog.SaveCategoryAsync(_form);
+        if (_error != null) return;
+        Toast.Success($"Category \"{_form.Name}\" saved.");
+        _form = null;
+        await Load();
+    }
+
+    private async Task Delete(Category c)
+    {
+        if (!await Confirm.Ask($"Delete \"{c.Name}\"?", "This cannot be undone.", "Delete")) return;
+        if (Ok(await Catalog.DeleteCategoryAsync(c.Id), "Category deleted."))
+            await Load();
+    }
+}

@@ -1,0 +1,59 @@
+@implements IDisposable
+@inject HotkeyService Hotkeys
+
+@* Usage: @if (_showForm) { <Modal Title="Add Product" OnClose="Close"> ... <Footer>buttons</Footer></Modal> } *@
+<div class="overlay" @onmousedown="OverlayDown">
+    <div class="modal @Size" @onmousedown:stopPropagation="true">
+        <div class="modal-head">
+            @if (!string.IsNullOrEmpty(Icon))
+            {
+                <Icon Name="@Icon" Style="color:var(--red)" />
+            }
+            <h3>@Title</h3>
+            <button type="button" class="modal-x" title="Close (Esc)" @onclick="Close"><Icon Name="x" Class="sm" /></button>
+        </div>
+        <div class="modal-body" style="@BodyStyle">
+            @ChildContent
+        </div>
+        @if (Footer != null)
+        {
+            <div class="modal-foot">@Footer</div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = "";
+    [Parameter] public string? Icon { get; set; }
+    [Parameter] public string Size { get; set; } = "";
+    [Parameter] public string? BodyStyle { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Footer { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    /// <summary>Clicking the dark background closes the dialog (off by default so typed data is not lost).</summary>
+    [Parameter] public bool CloseOnBackdrop { get; set; }
+
+    private IDisposable? _sub;
+
+    protected override void OnInitialized()
+    {
+        _sub = Hotkeys.Subscribe(async e =>
+        {
+            if (e.Key == "Escape")
+            {
+                e.Handled = true;
+                await InvokeAsync(Close);
+            }
+            else e.Handled = true; // while a dialog is open, page shortcuts are ignored
+        }, priority: 50);
+    }
+
+    private async Task OverlayDown()
+    {
+        if (CloseOnBackdrop) await Close();
+    }
+
+    private Task Close() => OnClose.InvokeAsync();
+
+    public void Dispose() => _sub?.Dispose();
+}

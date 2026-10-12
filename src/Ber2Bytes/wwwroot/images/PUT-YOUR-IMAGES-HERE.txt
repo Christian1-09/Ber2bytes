@@ -1,0 +1,13 @@
+Put your images in this folder (same file names), then rebuild the app:
+
+  logo.png         Your Ber2Bytes logo for WHITE backgrounds (black "COMPUTER PARTS" text).
+                   Transparent PNG works best, about 600px wide. Shown on the right side of the login.
+  logo-dark.png    (optional) Logo version for BLACK backgrounds (white text).
+                   Shown in the sidebar and on the left side of the login. If missing, logo.png is used.
+                   If no logo files exist, a text version of the logo is shown.
+
+  login-hero.jpg   The picture on the left side of the login screen
+                   (PC parts / gaming setup). About 1200 x 1400 px.
+                   If this file is missing, a dark red/black background is shown.
+
+  app.ico          (optional) Window/taskbar icon. Then uncomment <ApplicationIcon> in Ber2Bytes.csproj.

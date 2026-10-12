@@ -1,0 +1,185 @@
+@page "/inventory"
+@inherits AppPageBase
+@inject InventoryService InventorySvc
+@inject CatalogService Catalog
+
+@if (Allowed)
+{
+    <PageHeader Title="Inventory" Subtitle="Receive deliveries, correct stock and see every stock movement">
+        <Actions>
+            @if (Auth.Can(Perm.StockAdjust))
+            {
+                <button class="btn ghost" @onclick="OpenAdjust"><Icon Name="sliders" />Adjust Stock</button>
+            }
+            @if (Auth.Can(Perm.StockIn))
+            {
+                <button class="btn primary" @onclick="() => _showStockIn = true"><Icon Name="download" />Stock In</button>
+            }
+        </Actions>
+    </PageHeader>
+
+    <div class="chips">
+        <div class="chip"><div class="chip-l">Products</div><div class="chip-v">@_products.Count</div></div>
+        <div class="chip"><div class="chip-l">Units in stock</div><div class="chip-v">@(_products.Sum(p => p.Stock).ToString("N0"))</div></div>
+        <a class="chip clickable" href="products?filter=low"><div class="chip-l">Low stock</div><div class="chip-v" style="color:var(--amber)">@(_products.Count(p => p.Stock > 0 && p.Stock <= p.ReorderLevel))</div></a>
+        <a class="chip clickable" href="products?filter=low"><div class="chip-l">Out of stock</div><div class="chip-v" style="color:var(--red)">@(_products.Count(p => p.Stock <= 0))</div></a>
+        @if (Auth.Can(Perm.ViewCost))
+        {
+            <div class="chip"><div class="chip-l">Stock value (cost)</div><div class="chip-v">@(Fmt.Peso(_products.Sum(p => p.Stock * p.CostPrice)))</div></div>
+        }
+    </div>
+
+    <div class="toolbar">
+        <div class="search-box"><Icon Name="search" /><input placeholder="Search product, SKU or reference…" @bind="_search" @bind:event="oninput" @bind:after="Load" /></div>
+        <select @bind="_type" @bind:after="Load">
+            <option value="">All movement types</option>
+            <option value="@MovementType.StockIn">Stock In</option>
+            <option value="@MovementType.Sale">Sale</option>
+            <option value="@MovementType.Adjustment">Adjustment</option>
+            <option value="@MovementType.Return">Return</option>
+            <option value="@MovementType.Replacement">Replacement</option>
+            <option value="@MovementType.Void">Void</option>
+        </select>
+        <label>From</label><input type="date" @bind="_from" @bind:after="Load" />
+        <label>To</label><input type="date" @bind="_to" @bind:after="Load" />
+        <span class="spacer"></span>
+        <span class="count-note">Showing @_moves.Count movement(s) (latest 500)</span>
+    </div>
+
+    <div class="tbl-card">
+        <table>
+            <thead><tr><th>Date &amp; Time</th><th>Type</th><th>Product</th><th class="r">Qty</th><th class="r">Stock After</th><th>Reference</th><th>By</th><th>Notes</th></tr></thead>
+            <tbody>
+                @if (_moves.Count == 0)
+                {
+                    <TableEmptyRow Colspan="8" IconName="swap" Title="No stock movements found" />
+                }
+                @foreach (var m in _moves)
+                {
+                    <tr>
+                        <td class="nowrap">@Fmt.DateTimeText(m.Date)</td>
+                        <td><MovementBadge Type="m.Type" /></td>
+                        <td><div class="prod-name">@m.Product?.Name</div><div class="prod-sku">@m.Product?.Sku</div></td>
+                        <td class="r mono b @(m.Quantity < 0 ? "t-red" : "t-green")">@(m.Quantity > 0 ? "+" : "")@m.Quantity</td>
+                        <td class="r mono">@m.StockAfter</td>
+                        <td class="mono">@m.Reference</td>
+                        <td>@m.User?.FullName</td>
+                        <td class="muted small">@(m.Notes ?? "—")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    @if (_showStockIn)
+    {
+        <StockInDialog OnClose="() => _showStockIn = false" OnSaved="Reload" />
+    }
+
+    @if (_adjust != null)
+    {
+        <Modal Title="Stock Adjustment" Icon="sliders" OnClose="() => _adjust = null">
+            <ChildContent>
+                <div class="note warn"><Icon Name="info" />Use this only to correct stock (damaged, lost, physical count). To add new deliveries use <b>Stock In</b>.</div>
+                @if (_adjustError != null)
+                {
+                    <div class="form-error"><Icon Name="alert-circle" />@_adjustError</div>
+                }
+                <div class="form-grid">
+                    <div class="fg full">
+                        <label>Product <span class="req">*</span></label>
+                        <select @bind="_adjust.ProductId">
+                            <option value="0">Select product…</option>
+                            @foreach (var p in _products) { <option value="@p.Id">@p.Name — @p.Sku (stock @p.Stock)</option> }
+                        </select>
+                        @if (SelectedAdjust is { } sp)
+                        {
+                            <span class="hint">Current stock: <b>@sp.Stock</b></span>
+                        }
+                    </div>
+                    <div class="fg">
+                        <label>Adjustment</label>
+                        <select @bind="_adjust.Mode">
+                            <option value="@AdjustMode.Remove">Remove from stock</option>
+                            <option value="@AdjustMode.Add">Add to stock</option>
+                            <option value="@AdjustMode.SetCount">Set exact count (physical count)</option>
+                        </select>
+                    </div>
+                    <div class="fg">
+                        <label>@(_adjust.Mode == AdjustMode.SetCount ? "Actual count" : "Quantity") <span class="req">*</span></label>
+                        <input type="number" min="0" @bind="_adjust.Quantity" @bind:event="oninput" />
+                        @if (SelectedAdjust is { } sp2)
+                        {
+                            var after = StockAfterAdjust(sp2.Stock);
+                            <span class="hint">Stock after: <b class="@(after < 0 ? "t-red" : "")">@after</b></span>
+                        }
+                    </div>
+                    <div class="fg">
+                        <label>Reason <span class="req">*</span></label>
+                        <select @bind="_adjust.Reason">
+                            @foreach (var r in InventoryService.AdjustReasons) { <option value="@r">@r</option> }
+                        </select>
+                    </div>
+                    <div class="fg"><label>Notes</label><input placeholder="Optional details" @bind="_adjust.Notes" /></div>
+                </div>
+            </ChildContent>
+            <Footer>
+                <button class="btn ghost" @onclick="() => _adjust = null">Cancel</button>
+                <button class="btn primary" @onclick="SaveAdjust"><Icon Name="check" />Save Adjustment</button>
+            </Footer>
+        </Modal>
+    }
+}
+
+@code {
+    protected override string? Permission => Perm.StockView;
+
+    private List<StockMovement> _moves = [];
+    private List<Product> _products = [];
+    private string? _search;
+    private MovementType? _type;
+    private DateTime? _from;
+    private DateTime? _to;
+    private bool _showStockIn;
+    private AdjustForm? _adjust;
+    private string? _adjustError;
+
+    private Product? SelectedAdjust => _adjust == null ? null : _products.FirstOrDefault(p => p.Id == _adjust.ProductId);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Allowed) return;
+        await Reload();
+    }
+
+    private async Task Reload()
+    {
+        _products = await Catalog.GetProductsAsync();
+        await Load();
+    }
+
+    private async Task Load() => _moves = await InventorySvc.GetMovementsAsync(_search, _type, _from, _to);
+
+    private int StockAfterAdjust(int current) => _adjust!.Mode switch
+    {
+        AdjustMode.Add => current + _adjust.Quantity,
+        AdjustMode.Remove => current - _adjust.Quantity,
+        _ => _adjust.Quantity
+    };
+
+    private void OpenAdjust()
+    {
+        _adjustError = null;
+        _adjust = new AdjustForm();
+    }
+
+    private async Task SaveAdjust()
+    {
+        if (_adjust == null) return;
+        _adjustError = await InventorySvc.AdjustAsync(_adjust);
+        if (_adjustError != null) return;
+        Toast.Success("Stock adjusted.");
+        _adjust = null;
+        await Reload();
+    }
+}

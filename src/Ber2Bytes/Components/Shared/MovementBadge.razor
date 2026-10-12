@@ -1,0 +1,25 @@
+<span class="badge @Css">@Text</span>
+
+@code {
+    [Parameter] public MovementType Type { get; set; }
+
+    private string Css => Type switch
+    {
+        MovementType.StockIn => "green",
+        MovementType.Sale => "dark",
+        MovementType.Adjustment => "amber",
+        MovementType.Return => "blue",
+        MovementType.Replacement => "blue",
+        _ => "gray"
+    };
+
+    private string Text => Type switch
+    {
+        MovementType.StockIn => "Stock In",
+        MovementType.Sale => "Sale",
+        MovementType.Adjustment => "Adjustment",
+        MovementType.Return => "Return",
+        MovementType.Replacement => "Replacement",
+        _ => "Void"
+    };
+}

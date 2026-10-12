@@ -1,0 +1,143 @@
+@page "/login"
+@layout EmptyLayout
+@inject AuthService Auth
+@inject NavigationManager Nav
+@inject LocalPrefs Prefs
+@inject SettingsService Settings
+@inject IJSRuntime JS
+
+<div class="login">
+    <!-- LEFT: brand panel. Put your photo at wwwroot/images/login-hero.jpg -->
+    <section class="login-left">
+        <div class="brand">
+            <BrandLogo Size="big" OnDark="true" />
+            <div class="accent-line"></div>
+            <h2 class="tagline-title">Automated Inventory and<br />Sales Tracking System</h2>
+            <p class="tagline">Smarter Inventory. Better Sales. Stronger Business.</p>
+        </div>
+        <div class="branch"><Icon Name="pin" Class="lg" />@Settings.Current.BranchName</div>
+    </section>
+
+    <!-- RIGHT: sign-in form -->
+    <section class="login-right">
+        <div class="login-card">
+            <div class="brand"><BrandLogo Size="big" OnDark="false" /></div>
+            <h1>Automated Inventory and<br />Sales Tracking System</h1>
+
+            <form @onsubmit="SignIn" @onsubmit:preventDefault="true">
+                <div class="field-icon">
+                    <Icon Name="user" />
+                    <input id="login-user" placeholder="Username" @bind="_username" autocomplete="off" spellcheck="false" />
+                </div>
+                <div class="field-icon">
+                    <Icon Name="lock" />
+                    <input id="login-pass" type="@(_showPassword ? "text" : "password")" placeholder="Password" @bind="_password" @onkeyup="CheckCaps" />
+                    <button type="button" class="eye" title="@(_showPassword ? "Hide password" : "Show password")" @onclick="() => _showPassword = !_showPassword">
+                        <Icon Name="@(_showPassword ? "eye" : "eye-off")" />
+                    </button>
+                </div>
+                @if (_capsOn)
+                {
+                    <div class="caps-warn">⚠ Caps Lock is on</div>
+                }
+                <div class="login-row">
+                    <label class="check"><input type="checkbox" @bind="_remember" />Remember me</label>
+                    <button type="button" class="link" @onclick="() => { _showForgot = !_showForgot; _error = null; }">Forgot password?</button>
+                </div>
+                <button type="submit" class="login-btn" disabled="@_busy">
+                    <Icon Name="login" />@(_busy ? "Signing in…" : "Login")
+                </button>
+            </form>
+
+            @if (_error != null)
+            {
+                <div class="login-error"><Icon Name="x" />@_error</div>
+            }
+            @if (_showForgot)
+            {
+                <div class="login-info">
+                    <Icon Name="info" />
+                    <div>
+                        <b>Forgot your password?</b><br />
+                        This system works offline, so passwords can't be reset by email.
+                        Please ask your <b>administrator</b> to reset it in <i>User Management → Reset password</i>.
+                    </div>
+                </div>
+            }
+            <div class="login-foot"><Icon Name="database" Class="sm" />Works offline · Your data stays on this computer</div>
+        </div>
+        <div class="login-corner"></div>
+    </section>
+</div>
+
+@code {
+    private string _username = "";
+    private string _password = "";
+    private bool _remember;
+    private bool _showPassword;
+    private bool _busy;
+    private bool _capsOn;
+    private bool _showForgot;
+    private string? _error;
+
+    protected override void OnInitialized()
+    {
+        if (Auth.IsLoggedIn)
+        {
+            Nav.NavigateTo("/");
+            return;
+        }
+        _username = Prefs.RememberedUsername ?? "";
+        _remember = Prefs.RememberedUsername != null;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await JS.InvokeVoidAsync("b2b.focus", string.IsNullOrEmpty(_username) ? "login-user" : "login-pass");
+    }
+
+    private void CheckCaps(KeyboardEventArgs e)
+    {
+        // A capital letter typed without Shift means Caps Lock is on.
+        if (e.Key.Length == 1 && char.IsLetter(e.Key[0]))
+            _capsOn = char.IsUpper(e.Key[0]) != e.ShiftKey;
+    }
+
+    private async Task SignIn()
+    {
+        _error = null;
+        _showForgot = false;
+        if (string.IsNullOrWhiteSpace(_username) || string.IsNullOrEmpty(_password))
+        {
+            _error = "Please enter your username and password.";
+            return;
+        }
+        _busy = true;
+        try
+        {
+            var result = await Auth.LoginAsync(_username, _password, _remember);
+            switch (result)
+            {
+                case LoginResult.Success:
+                    Nav.NavigateTo(Auth.Can(Perm.Dashboard) ? "/" : "/pos");
+                    return;
+                case LoginResult.Disabled:
+                    _error = "This account is disabled. Please contact your administrator.";
+                    break;
+                case LoginResult.LockedOut:
+                    _error = $"Too many failed attempts. Please wait {Auth.LockSecondsLeft} seconds and try again.";
+                    break;
+                default:
+                    _error = "Invalid username or password. Please try again.";
+                    break;
+            }
+            _password = "";
+            await JS.InvokeVoidAsync("b2b.focus", "login-pass");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

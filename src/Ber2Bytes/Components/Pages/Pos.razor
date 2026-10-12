@@ -1,0 +1,391 @@
+@page "/pos"
+@inherits AppPageBase
+@implements IDisposable
+@inject CatalogService Catalog
+@inject SalesService Sales
+@inject PosCart Cart
+@inject HotkeyService Hotkeys
+@inject IJSRuntime JS
+
+@if (Allowed)
+{
+    <div class="pos">
+        <!-- ═══ LEFT: products ═══ -->
+        <div class="pos-left">
+            <div class="scan">
+                <Icon Name="barcode" Class="lg" />
+                <input id="pos-scan" placeholder="Scan barcode or type product name / SKU, then press Enter" autocomplete="off"
+                       @bind="_query" @bind:event="oninput" @onkeydown="ScanKey" />
+                <span class="kbd">F2</span>
+            </div>
+            <div class="pills">
+                <button class="pill @(_categoryId == null ? "on" : "")" @onclick="() => _categoryId = null">All</button>
+                @foreach (var c in _categories)
+                {
+                    <button class="pill @(_categoryId == c.Id ? "on" : "")" @onclick="() => _categoryId = c.Id"><Icon Name="@c.Icon" Class="sm" />@c.Name</button>
+                }
+            </div>
+            <div class="pgrid">
+                @foreach (var p in Filtered)
+                {
+                    var inCart = Cart.Lines.FirstOrDefault(l => l.ProductId == p.Id)?.Quantity ?? 0;
+                    <button type="button" class="pcard @(p.Stock <= 0 ? "out" : "")" title="@p.Name" @onclick="() => Add(p)">
+                        <ProductThumb ImageFile="@p.ImageFile" IconName="@(p.Category?.Icon ?? "box")" Color="@(p.Category?.Color ?? "#E11D2A")" CssClass="pimg" />
+                        <div class="pname">@p.Name</div>
+                        <div class="psku">@p.Sku</div>
+                        <div class="pmeta">
+                            <span class="pprice">@Fmt.Peso(p.SellingPrice)</span>
+                            @if (p.Stock <= 0)
+                            {
+                                <span class="badge red">Out</span>
+                            }
+                            else
+                            {
+                                <span class="badge @(p.Stock <= p.ReorderLevel ? "amber" : "gray")">@p.Stock left</span>
+                            }
+                        </div>
+                        @if (inCart > 0)
+                        {
+                            <span class="incart">@inCart</span>
+                        }
+                    </button>
+                }
+                @if (!Filtered.Any())
+                {
+                    <div style="grid-column:1/-1"><EmptyState IconName="search" Title="No products found" Text="Try another name, SKU or category." /></div>
+                }
+            </div>
+        </div>
+
+        <!-- ═══ RIGHT: cart ═══ -->
+        <div class="cart">
+            <div class="cart-head">
+                <div class="cart-title">
+                    <Icon Name="cart" Style="color:var(--red)" />
+                    <h3>Current Sale</h3>
+                    <span class="badge gray">@Cart.ItemCount item(s)</span>
+                    <span class="spacer"></span>
+                    <button class="btn ghost sm" title="Recall a held sale" @onclick="() => _showHeld = true">Held (@Cart.Held.Count)</button>
+                    <button class="btn ghost sm" title="Park this sale and serve another customer" @onclick="Hold"><Icon Name="pause" />Hold</button>
+                    <button class="btn ghost sm" title="Clear cart" @onclick="ClearCart"><Icon Name="trash" /></button>
+                </div>
+                <div class="cart-cust">
+                    <input placeholder="Customer name (optional)" @bind="Cart.Customer" />
+                    <input placeholder="Phone" @bind="Cart.Phone" />
+                </div>
+            </div>
+
+            <div class="cart-items">
+                @if (Cart.Lines.Count == 0)
+                {
+                    <EmptyState IconName="cart" Title="Cart is empty" Text="Scan a barcode or click a product to add it." />
+                }
+                @foreach (var l in Cart.Lines)
+                {
+                    <div class="citem" @key="l.ProductId">
+                        <ProductThumb ImageFile="@l.ImageFile" IconName="@l.Icon" Color="@l.Color" CssClass="thumb sm" />
+                        <div class="citem-info">
+                            <div class="citem-name" title="@l.Name">@l.Name</div>
+                            <div class="citem-sub">@Fmt.Peso(l.Price) · @l.Available in stock</div>
+                        </div>
+                        <div class="qty">
+                            <button @onclick="() => ChangeQty(l, -1)"><Icon Name="minus" /></button>
+                            <input type="number" min="1" value="@l.Quantity" @onchange="e => SetQty(l, e.Value)" />
+                            <button @onclick="() => ChangeQty(l, 1)"><Icon Name="plus" /></button>
+                        </div>
+                        <div class="citem-total">@Fmt.Peso(l.LineTotal)</div>
+                        <button class="x" title="Remove" @onclick="() => Cart.Lines.Remove(l)"><Icon Name="x" /></button>
+                    </div>
+                }
+            </div>
+
+            <div class="cart-foot">
+                <div class="sum"><span>Subtotal</span><b>@Fmt.Peso(Cart.Subtotal)</b></div>
+                <div class="sum">
+                    <span>Discount @(Cart.Discount > 0 ? $"(-{Fmt.Peso(Cart.Discount)})" : "")</span>
+                    <div class="disc">
+                        <input type="number" min="0" placeholder="0" @bind="Cart.DiscountValue" @bind:event="oninput" />
+                        <div class="seg">
+                            <button class="@(Cart.DiscountIsPercent ? "on" : "")" @onclick="() => Cart.DiscountIsPercent = true">%</button>
+                            <button class="@(!Cart.DiscountIsPercent ? "on" : "")" @onclick="() => Cart.DiscountIsPercent = false">₱</button>
+                        </div>
+                    </div>
+                </div>
+                @if (!Auth.IsAdmin && Cart.DiscountPercent > Settings.Current.StaffMaxDiscountPercent)
+                {
+                    <div class="note warn" style="margin:4px 0 8px;padding:6px 10px;font-size:12px"><Icon Name="alert" Class="sm" />Staff discount limit is @(Settings.Current.StaffMaxDiscountPercent.ToString("0.##"))%.</div>
+                }
+                <div class="sum total"><span>TOTAL</span><span>@Fmt.Peso(Cart.Total)</span></div>
+
+                <div class="pay">
+                    <button class="@(Cart.Method == PaymentMethod.Cash ? "on" : "")" @onclick="() => SetMethod(PaymentMethod.Cash)"><Icon Name="money" />Cash</button>
+                    <button class="gcash @(Cart.Method == PaymentMethod.GCash ? "on" : "")" @onclick="() => SetMethod(PaymentMethod.GCash)"><Icon Name="phone" />GCash</button>
+                </div>
+
+                @if (Cart.Method == PaymentMethod.Cash)
+                {
+                    <div class="tender">
+                        <label>Cash received</label>
+                        <input id="pos-tender" type="number" min="0" placeholder="0.00" @bind="Cart.Tendered" @bind:event="oninput" @onkeydown="TenderKey" />
+                    </div>
+                    <div class="quickcash">
+                        <button @onclick="() => Cart.Tendered = Cart.Total">Exact</button>
+                        <button @onclick="() => AddCash(100)">+100</button>
+                        <button @onclick="() => AddCash(500)">+500</button>
+                        <button @onclick="() => AddCash(1000)">+1,000</button>
+                        <button @onclick="() => AddCash(5000)">+5,000</button>
+                        <button @onclick="() => Cart.Tendered = null">Clear</button>
+                    </div>
+                    <div class="sum">
+                        <span>@(Cart.IsShort ? "Short by" : "Change")</span>
+                        <span class="change @(Cart.IsShort ? "short" : "")">@Fmt.Peso(Cart.IsShort ? Cart.Total - (Cart.Tendered ?? 0) : Cart.Change)</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="tender">
+                        <label>GCash Ref No.</label>
+                        <input id="pos-tender" class="text" placeholder="13-digit reference number" @bind="Cart.ReferenceNo" @bind:event="oninput" @onkeydown="TenderKey" />
+                    </div>
+                }
+
+                <button class="btn success charge" disabled="@(_busy || Cart.Lines.Count == 0)" @onclick="Checkout">
+                    <Icon Name="check" />@(_busy ? "Saving…" : $"Charge {Fmt.Peso(Cart.Total)}")
+                    <span class="kbd" style="background:rgba(255,255,255,.18);color:#fff;border-color:transparent">F9</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ RECEIPT ═══ -->
+    @if (_receipt != null)
+    {
+        <Modal Title="@($"Sale completed — {_receipt.InvoiceNo}")" Icon="check" Size="sm" OnClose="CloseReceipt" BodyStyle="background:var(--g100)">
+            <ChildContent>@((MarkupString)ReceiptBuilder.Build(_receipt, Settings.Current))</ChildContent>
+            <Footer>
+                <button class="btn ghost" @onclick="CloseReceipt">New Sale</button>
+                <button class="btn primary" @onclick="PrintReceipt"><Icon Name="printer" />Print Receipt</button>
+            </Footer>
+        </Modal>
+    }
+
+    <!-- ═══ HELD SALES ═══ -->
+    @if (_showHeld)
+    {
+        <Modal Title="Held Sales" Icon="pause" Size="sm" OnClose="() => _showHeld = false">
+            @if (Cart.Held.Count == 0)
+            {
+                <EmptyState IconName="pause" Title="No held sales" Text="Use Hold to park a sale while you serve another customer." />
+            }
+            @foreach (var h in Cart.Held.ToList())
+            {
+                <div class="li">
+                    <div class="li-main">
+                        <div class="li-name">@(h.Customer ?? "Walk-in") · @(h.Lines.Sum(x => x.Quantity)) item(s)</div>
+                        <div class="li-sub">Held at @Fmt.Time(h.HeldAt) · @Fmt.Peso(h.Total)</div>
+                    </div>
+                    <button class="btn primary sm" @onclick="() => Recall(h)">Recall</button>
+                    <button class="act del" title="Discard" @onclick="() => Cart.Held.Remove(h)"><Icon Name="trash" /></button>
+                </div>
+            }
+        </Modal>
+    }
+}
+
+@code {
+    protected override string? Permission => Perm.Pos;
+
+    private List<Product> _products = [];
+    private List<Category> _categories = [];
+    private int? _categoryId;
+    private string _query = "";
+    private bool _busy;
+    private bool _showHeld;
+    private Sale? _receipt;
+    private IDisposable? _hotkeySub;
+
+    private IEnumerable<Product> Filtered
+    {
+        get
+        {
+            var q = _query.Trim().ToLowerInvariant();
+            return _products.Where(p => (_categoryId == null || p.CategoryId == _categoryId)
+                && (q.Length == 0 || p.Name.ToLowerInvariant().Contains(q) || p.Sku.ToLowerInvariant().Contains(q)
+                    || (p.Barcode ?? "").Contains(q) || (p.Brand ?? "").ToLowerInvariant().Contains(q)));
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Allowed) return;
+        _categories = await Catalog.GetCategoriesAsync();
+        await LoadProducts();
+        _hotkeySub = Hotkeys.Subscribe(OnHotkey);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && Allowed) await JS.InvokeVoidAsync("b2b.focus", "pos-scan");
+    }
+
+    private async Task LoadProducts()
+    {
+        _products = await Catalog.GetProductsAsync();
+        // Refresh stock numbers of items already in the cart.
+        foreach (var l in Cart.Lines)
+        {
+            var p = _products.FirstOrDefault(x => x.Id == l.ProductId);
+            l.Available = p?.Stock ?? 0;
+            if (p != null) l.Price = p.SellingPrice;
+        }
+    }
+
+    private async Task OnHotkey(HotkeyEvent e)
+    {
+        switch (e.Key)
+        {
+            case "F2": e.Handled = true; await JS.InvokeVoidAsync("b2b.focus", "pos-scan", true); break;
+            case "F4": e.Handled = true; await JS.InvokeVoidAsync("b2b.focus", "pos-tender", true); break;
+            case "F9":
+                e.Handled = true;
+                await InvokeAsync(async () => { await Checkout(); StateHasChanged(); });
+                break;
+        }
+    }
+
+    private void Add(Product p)
+    {
+        if (p.Stock <= 0) { Toast.Error($"{p.Name} is out of stock."); return; }
+        var line = Cart.Lines.FirstOrDefault(l => l.ProductId == p.Id);
+        if (line != null)
+        {
+            if (line.Quantity >= p.Stock) { Toast.Warning($"Only {p.Stock} in stock."); return; }
+            line.Quantity++;
+        }
+        else
+        {
+            Cart.Lines.Add(new CartLine
+            {
+                ProductId = p.Id, Name = p.Name, Sku = p.Sku, Price = p.SellingPrice, Quantity = 1, Available = p.Stock,
+                ImageFile = p.ImageFile, Icon = p.Category?.Icon ?? "box", Color = p.Category?.Color ?? "#E11D2A"
+            });
+        }
+    }
+
+    private async Task ScanKey(KeyboardEventArgs e)
+    {
+        if (e.Key != "Enter") return;
+        var code = _query.Trim();
+        if (code.Length == 0) return;
+
+        var exact = _products.FirstOrDefault(p => p.Barcode == code || string.Equals(p.Sku, code, StringComparison.OrdinalIgnoreCase))
+                    ?? await Catalog.FindByCodeAsync(code);
+        var matches = Filtered.ToList();
+        if (exact != null) Add(_products.FirstOrDefault(p => p.Id == exact.Id) ?? exact);
+        else if (matches.Count == 1) Add(matches[0]);
+        else
+        {
+            Toast.Warning(matches.Count == 0 ? $"No product matches \"{code}\"." : "Several products match — click the one you want.");
+            return;
+        }
+        _query = "";
+    }
+
+    private void ChangeQty(CartLine l, int delta)
+    {
+        var n = l.Quantity + delta;
+        if (n <= 0) { Cart.Lines.Remove(l); return; }
+        if (n > l.Available) { Toast.Warning($"Only {l.Available} in stock."); return; }
+        l.Quantity = n;
+    }
+
+    private void SetQty(CartLine l, object? value)
+    {
+        if (!int.TryParse(value?.ToString(), out var n) || n < 1) n = 1;
+        if (n > l.Available) { Toast.Warning($"Only {l.Available} in stock."); n = l.Available; }
+        l.Quantity = Math.Max(1, n);
+    }
+
+    private void SetMethod(PaymentMethod m)
+    {
+        Cart.Method = m;
+        Cart.Tendered = null;
+        Cart.ReferenceNo = null;
+    }
+
+    private void AddCash(decimal amount) => Cart.Tendered = (Cart.Tendered ?? 0) + amount;
+
+    private async Task TenderKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await Checkout();
+    }
+
+    private void Hold()
+    {
+        if (Cart.Lines.Count == 0) { Toast.Warning("The cart is empty."); return; }
+        Cart.Held.Add(new HeldCart { Lines = Cart.Lines.ToList(), Customer = Cart.Customer, Phone = Cart.Phone });
+        Cart.Clear();
+        Toast.Info("Sale put on hold. Use Held to bring it back.");
+    }
+
+    private void Recall(HeldCart h)
+    {
+        if (Cart.Lines.Count > 0) { Toast.Warning("Finish or hold the current sale first."); return; }
+        Cart.Held.Remove(h);
+        Cart.Lines.AddRange(h.Lines);
+        Cart.Customer = h.Customer;
+        Cart.Phone = h.Phone;
+        _showHeld = false;
+        _ = LoadProducts();
+        Toast.Success("Held sale recalled.");
+    }
+
+    private async Task ClearCart()
+    {
+        if (Cart.Lines.Count == 0) return;
+        if (await Confirm.Ask("Clear this sale?", "All items in the cart will be removed.", "Clear Cart"))
+            Cart.Clear();
+    }
+
+    private async Task Checkout()
+    {
+        if (_busy || _receipt != null) return;
+        if (Cart.Lines.Count == 0) { Toast.Warning("The cart is empty."); return; }
+        _busy = true;
+        try
+        {
+            var (sale, error) = await Sales.CheckoutAsync(Cart);
+            if (error != null)
+            {
+                Toast.Error(error);
+                await LoadProducts();
+                return;
+            }
+            var lowNow = Cart.Lines.Where(l => l.Available - l.Quantity <= (_products.FirstOrDefault(p => p.Id == l.ProductId)?.ReorderLevel ?? 0))
+                                   .Select(l => l.Name).ToList();
+            Cart.Clear();
+            _receipt = sale;
+            await LoadProducts();
+            Toast.Success($"Sale {sale!.InvoiceNo} completed.");
+            if (lowNow.Count > 0) Toast.Warning("Now low on stock: " + string.Join(", ", lowNow));
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task PrintReceipt()
+    {
+        if (_receipt == null) return;
+        await JS.InvokeVoidAsync("b2b.printHtml", _receipt.InvoiceNo, ReceiptBuilder.Build(_receipt, Settings.Current), ReceiptBuilder.PrintCss);
+    }
+
+    private async Task CloseReceipt()
+    {
+        _receipt = null;
+        await JS.InvokeVoidAsync("b2b.focus", "pos-scan");
+    }
+
+    public void Dispose() => _hotkeySub?.Dispose();
+}

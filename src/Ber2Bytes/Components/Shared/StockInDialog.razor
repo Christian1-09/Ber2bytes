@@ -1,0 +1,111 @@
+@inject InventoryService Inventory
+@inject CatalogService Catalog
+@inject AuthService Auth
+@inject ToastService Toast
+
+@* Receive a delivery from a supplier. Used on Inventory, Products, Alerts and Dashboard. *@
+<Modal Title="Stock In — Receive Delivery" Icon="download" OnClose="OnClose">
+    <ChildContent>
+        @if (_error != null)
+        {
+            <div class="form-error"><Icon Name="alert-circle" />@_error</div>
+        }
+        <div class="form-grid">
+            <div class="fg full">
+                <label>Product <span class="req">*</span></label>
+                <select value="@_form.ProductId" @onchange="OnProductChanged">
+                    <option value="0">Select product…</option>
+                    @foreach (var p in _products)
+                    {
+                        <option value="@p.Id">@p.Name — @p.Sku (stock @p.Stock)</option>
+                    }
+                </select>
+                @if (_selected != null)
+                {
+                    <span class="hint">Current stock: <b>@_selected.Stock</b> · Reorder level: @(_selected.ReorderLevel + (Auth.Can(Perm.ViewCost) ? $" · Current cost: {Fmt.Peso(_selected.CostPrice)}" : ""))</span>
+                }
+            </div>
+            <div class="fg">
+                <label>Supplier</label>
+                <select @bind="_form.SupplierId">
+                    <option value="">— None —</option>
+                    @foreach (var s in _suppliers)
+                    {
+                        <option value="@s.Id">@s.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="fg">
+                <label>Delivery Receipt / Ref No.</label>
+                <input placeholder="e.g. DR-2026-0012" @bind="_form.Reference" />
+            </div>
+            <div class="fg">
+                <label>Quantity Received <span class="req">*</span></label>
+                <input id="si-qty" type="number" min="1" @bind="_form.Quantity" />
+                @if (_selected != null && _form.Quantity > 0)
+                {
+                    <span class="hint">New stock will be <b>@(_selected.Stock + _form.Quantity)</b></span>
+                }
+            </div>
+            @if (Auth.Can(Perm.ViewCost))
+            {
+                <div class="fg">
+                    <label>Unit Cost (₱)</label>
+                    <input type="number" min="0" step="0.01" placeholder="@(_selected?.CostPrice.ToString("0.00") ?? "")" @bind="_form.UnitCost" />
+                    <span class="hint">Leave blank to keep the current cost</span>
+                </div>
+            }
+            <div class="fg full">
+                <label>Notes</label>
+                <input placeholder="Optional" @bind="_form.Notes" />
+            </div>
+        </div>
+    </ChildContent>
+    <Footer>
+        <button class="btn ghost" @onclick="OnClose">Cancel</button>
+        <button class="btn primary" disabled="@_busy" @onclick="Save"><Icon Name="download" />Receive Stock</button>
+    </Footer>
+</Modal>
+
+@code {
+    [Parameter] public int? ProductId { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnSaved { get; set; }
+
+    private readonly StockInForm _form = new();
+    private List<Product> _products = [];
+    private List<Supplier> _suppliers = [];
+    private Product? _selected;
+    private string? _error;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _products = await Catalog.GetProductsAsync();
+        _suppliers = await Catalog.GetSuppliersAsync();
+        if (ProductId.HasValue) Select(ProductId.Value);
+    }
+
+    private void OnProductChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var id)) Select(id);
+    }
+
+    private void Select(int id)
+    {
+        _form.ProductId = id;
+        _selected = _products.FirstOrDefault(p => p.Id == id);
+        if (_selected != null) _form.SupplierId = _selected.SupplierId;
+    }
+
+    private async Task Save()
+    {
+        _busy = true;
+        _error = await Inventory.StockInAsync(_form);
+        _busy = false;
+        if (_error != null) return;
+        Toast.Success($"Received {_form.Quantity} × {_selected?.Name}.");
+        await OnSaved.InvokeAsync();
+        await OnClose.InvokeAsync();
+    }
+}

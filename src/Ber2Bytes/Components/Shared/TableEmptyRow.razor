@@ -1,0 +1,8 @@
+<tr><td colspan="@Colspan"><EmptyState IconName="@IconName" Title="@Title" Text="@Text" /></td></tr>
+
+@code {
+    [Parameter] public int Colspan { get; set; } = 1;
+    [Parameter] public string IconName { get; set; } = "search";
+    [Parameter] public string Title { get; set; } = "No records found";
+    [Parameter] public string? Text { get; set; } = "Try changing the filters.";
+}

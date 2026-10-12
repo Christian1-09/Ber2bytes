@@ -1,0 +1,35 @@
+@*
+    Shows your real logo from wwwroot/images:
+      • on dark backgrounds (sidebar, left login panel): logo-dark.png, or logo.png if that is missing
+      • on light backgrounds: logo.png
+    Until you add the files, a text version of the Ber2Bytes logo is shown instead.
+    Size: "big" (login) or "side" (sidebar).
+*@
+<div class="brand-logo" style="display:flex;justify-content:center">
+    @if (_attempt < Sources.Length)
+    {
+        <img class="logo-img @Size" src="@Sources[_attempt]" alt="Ber2Bytes" @onerror="OnImageError" @key="_attempt" />
+    }
+    else
+    {
+        <div class="text-logo @Size @(OnDark ? "on-dark" : "on-light")">
+            <span class="crown"><Icon Name="crown" /></span>
+            <span class="word">BER<span class="two">2</span>BYTES</span>
+            @if (ShowSub)
+            {
+                <span class="sub">Computer Parts &amp; Accessories</span>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Size { get; set; } = "big";
+    [Parameter] public bool OnDark { get; set; }
+    [Parameter] public bool ShowSub { get; set; } = true;
+
+    private int _attempt;
+    private string[] Sources => OnDark ? new[] { "images/logo-dark.png", "images/logo.png" } : new[] { "images/logo.png" };
+
+    private void OnImageError() => _attempt++;
+}

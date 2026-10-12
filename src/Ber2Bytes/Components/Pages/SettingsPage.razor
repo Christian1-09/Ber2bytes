@@ -1,0 +1,118 @@
+@page "/settings"
+@inherits AppPageBase
+@inject BackupService Backup
+@inject FileDialogService Files
+
+@if (Allowed && _s != null)
+{
+    <PageHeader Title="Settings" Subtitle="Store information, sales rules and backups">
+        <Actions>
+            <button class="btn primary" @onclick="Save"><Icon Name="check" />Save Settings</button>
+        </Actions>
+    </PageHeader>
+
+    <div class="grid-2">
+        <div class="card card-pad">
+            <h3 style="font-size:16px;margin-bottom:16px">Store &amp; Receipt</h3>
+            <div class="form-grid">
+                <div class="fg full"><label>Store Name <span class="req">*</span></label><input @bind="_s.StoreName" /></div>
+                <div class="fg"><label>Branch</label><input @bind="_s.BranchName" /></div>
+                <div class="fg"><label>Phone</label><input @bind="_s.Phone" /></div>
+                <div class="fg full"><label>Address</label><input @bind="_s.Address" /></div>
+                <div class="fg full"><label>Receipt Footer</label><textarea @bind="_s.ReceiptFooter"></textarea></div>
+            </div>
+            <div class="note" style="margin-top:16px;margin-bottom:0">
+                <Icon Name="image" />
+                <div>To show your logo, put <b>logo.png</b> (and the login photo <b>login-hero.jpg</b>) in the app's <b>wwwroot\images</b> folder, then rebuild.</div>
+            </div>
+        </div>
+
+        <div>
+            <div class="card card-pad" style="margin-bottom:18px">
+                <h3 style="font-size:16px;margin-bottom:16px">Sales &amp; Inventory Rules</h3>
+                <div class="form-grid">
+                    <div class="fg"><label>Max discount staff can give (%)</label><input type="number" min="0" max="100" @bind="_s.StaffMaxDiscountPercent" /><span class="hint">Admins have no limit</span></div>
+                    <div class="fg"><label>Default reorder level</label><input type="number" min="0" @bind="_s.DefaultReorderLevel" /><span class="hint">Used for new products</span></div>
+                    <div class="fg"><label>Dead stock after (days without sales)</label><input type="number" min="7" @bind="_s.DeadStockDays" /><span class="hint">Used on the dashboard and alerts</span></div>
+                    <div class="fg"><label>Slow-moving if sold ≤ (units in that period)</label><input type="number" min="0" @bind="_s.SlowMovingMaxQty" /></div>
+                    <div class="fg"><label>Return period (days)</label><input type="number" min="0" @bind="_s.ReturnWindowDays" /><span class="hint">Printed on receipts</span></div>
+                </div>
+            </div>
+
+            <div class="card card-pad">
+                <h3 style="font-size:16px;margin-bottom:6px">Backup &amp; Restore</h3>
+                <p class="hint" style="margin-bottom:14px">The app works offline, so keep backups on a USB drive or a cloud folder. A backup contains the database and all product photos.</p>
+                <label class="check" style="margin-bottom:14px"><input type="checkbox" @bind="_s.AutoBackupOnExit" />Make an automatic backup every day when the app closes (keeps the last 14)</label>
+                <div class="row" style="flex-wrap:wrap">
+                    <button class="btn dark" disabled="@_busy" @onclick="DoBackup"><Icon Name="download" />Create Backup…</button>
+                    <button class="btn ghost" disabled="@_busy" @onclick="DoRestore"><Icon Name="upload" />Restore Backup…</button>
+                    <button class="btn ghost" @onclick="() => Files.OpenWithDefaultApp(AppPaths.AutoBackupFolder)"><Icon Name="archive" />Open auto-backups</button>
+                </div>
+                <div class="sec">Data location</div>
+                <p class="small mono" style="word-break:break-all">@AppPaths.DataFolder</p>
+
+                <div class="sec" style="color:var(--red)">Danger zone</div>
+                <p class="hint" style="margin-bottom:10px">Before going live, remove the sample sales. Products, categories, suppliers, users and settings are kept.</p>
+                <button class="btn danger-ghost" @onclick="StartFresh"><Icon Name="trash" />Start fresh (delete all transactions)</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    protected override string? Permission => Perm.Settings;
+    private StoreSettings? _s;
+    private bool _busy;
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        if (Allowed) _s = Settings.EditableCopy();
+    }
+
+    private async Task Save()
+    {
+        if (_s == null) return;
+        if (Ok(await Settings.SaveAsync(_s), "Settings saved."))
+            _s = Settings.EditableCopy();
+    }
+
+    private async Task DoBackup()
+    {
+        var path = Files.AskSavePath($"Ber2Bytes-backup-{DateTime.Now:yyyy-MM-dd-HHmm}.zip", "Backup file (*.zip)|*.zip");
+        if (path == null) return;
+        _busy = true;
+        try
+        {
+            await Task.Run(() => Backup.CreateBackup(path));
+            Toast.Success("Backup created. Keep a copy on a USB drive or cloud folder.");
+            Files.ShowInFolder(path);
+        }
+        catch (Exception ex) { AppLog.Error("Backup failed", ex); Toast.Error("Backup failed: " + ex.Message); }
+        finally { _busy = false; }
+    }
+
+    private async Task DoRestore()
+    {
+        var path = Files.AskOpenPath("Backup file (*.zip)|*.zip");
+        if (path == null) return;
+        var err = Backup.Validate(path);
+        if (err != null) { Toast.Error(err); return; }
+        if (!await Confirm.AskTyped("Restore this backup?",
+                "ALL current data will be replaced by the backup and the app will restart.\nA safety copy of the current data is saved first in the auto-backups folder.",
+                "RESTORE", "Restore & Restart"))
+            return;
+        try { Backup.RestoreAndRestart(path); }
+        catch (Exception ex) { AppLog.Error("Restore failed", ex); Toast.Error("Restore failed: " + ex.Message); }
+    }
+
+    private async Task StartFresh()
+    {
+        if (!await Confirm.AskTyped("Delete all transactions?",
+                "This deletes ALL sales, returns, stock movements and the activity log. Product stock numbers stay as they are now.\nMake a backup first if you are not sure.",
+                "DELETE", "Delete Everything"))
+            return;
+        await Backup.ClearTransactionsAsync(Auth.UserId, Auth.UserName);
+        Toast.Success("All transactions were deleted. You're ready to go live.");
+    }
+}

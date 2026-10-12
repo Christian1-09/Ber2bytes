@@ -1,0 +1,59 @@
+@using System.Globalization
+@* Simple SVG bar chart (no chart library needed, works offline). The highest bar gets a value tag. *@
+@if (Points.Count == 0 || Points.All(p => p.Value == 0))
+{
+    <div class="chart-empty">No sales in this period yet</div>
+}
+else
+{
+    var max = ChartMath.NiceMax(Points.Max(p => p.Value));
+    var plotW = W - Left - 8;
+    var plotH = H - Top - Bottom;
+    var slot = plotW / Points.Count;
+    var barW = Math.Min(42, slot * 0.6);
+    var peak = Points.IndexOf(Points.MaxBy(p => p.Value)!);
+
+    <svg class="chart" viewBox="0 0 @F(W) @F(H)" preserveAspectRatio="xMidYMid meet">
+        @for (int t = 0; t <= 4; t++)
+        {
+            var y = Top + plotH - plotH * t / 4.0;
+            var label = ChartMath.Short(max * t / 4);
+            <g>
+                <line class="grid-line" x1="@F(Left)" x2="@F(W - 8)" y1="@F(y)" y2="@F(y)" />
+                <text class="tick" x="@F(Left - 8)" y="@F(y + 4)" text-anchor="end">@label</text>
+            </g>
+        }
+        @for (int i = 0; i < Points.Count; i++)
+        {
+            var p = Points[i];
+            var h = max == 0 ? 0 : (double)(p.Value / max) * plotH;
+            var x = Left + slot * i + (slot - barW) / 2;
+            var y = Top + plotH - h;
+            <g>
+                <rect class="bar" x="@F(x)" y="@F(y)" width="@F(barW)" height="@F(Math.Max(h, 1))" rx="2">
+                    <title>@(p.Tooltip ?? $"{p.Label}: {Fmt.Peso(p.Value)}")</title>
+                </rect>
+                <text class="tick" x="@F(x + barW / 2)" y="@F(H - 6)" text-anchor="middle">@p.Label</text>
+                @if (i == peak && ShowPeakTag)
+                {
+                    var tag = Fmt.Peso(p.Value).Replace(".00", "");
+                    var tw = tag.Length * 6.6 + 14;
+                    var tx = Math.Clamp(x + barW / 2 - tw / 2, Left, W - tw - 4);
+                    <g class="tag">
+                        <rect x="@F(tx)" y="@F(y - 26)" width="@F(tw)" height="19" rx="4" />
+                        <text x="@F(tx + tw / 2)" y="@F(y - 12.5)" text-anchor="middle">@tag</text>
+                    </g>
+                }
+            </g>
+        }
+    </svg>
+}
+
+@code {
+    [Parameter] public List<ChartPoint> Points { get; set; } = [];
+    [Parameter] public bool ShowPeakTag { get; set; } = true;
+
+    private const double W = 520, H = 220, Left = 46, Top = 30, Bottom = 26;
+
+    private static string F(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+}

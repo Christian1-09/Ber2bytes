@@ -1,0 +1,293 @@
+@page "/returns"
+@inherits AppPageBase
+@inject ReturnService ReturnsSvc
+@inject SalesService SalesSvc
+
+@if (Allowed)
+{
+    <PageHeader Title="Returns" Subtitle="Customer returns: refund or replace an item from a receipt">
+        <Actions>
+            <button class="btn primary" @onclick="() => OpenNew(null)"><Icon Name="plus" />New Return</button>
+        </Actions>
+    </PageHeader>
+
+    @if (!Auth.Can(Perm.ReturnsProcess))
+    {
+        <div class="note"><Icon Name="info" />Returns you file are sent to an administrator for approval. Stock and refunds are updated after approval.</div>
+    }
+
+    <div class="chips">
+        <div class="chip clickable @(_status == null ? "active" : "")" @onclick="() => Filter(null)"><div class="chip-l">All</div><div class="chip-v">@_counts.Values.Sum()</div></div>
+        @foreach (var st in Enum.GetValues<ReturnStatus>())
+        {
+            <div class="chip clickable @(_status == st ? "active" : "")" @onclick="() => Filter(st)"><div class="chip-l">@st</div><div class="chip-v">@_counts.GetValueOrDefault(st)</div></div>
+        }
+    </div>
+
+    <div class="toolbar">
+        <div class="search-box"><Icon Name="search" /><input placeholder="Search return no., OR no., product or customer…" @bind="_search" @bind:event="oninput" @bind:after="Load" /></div>
+    </div>
+
+    <div class="tbl-card">
+        <table>
+            <thead><tr><th>Return No.</th><th>Date</th><th>OR No.</th><th>Product</th><th class="r">Qty</th><th>Customer</th><th>Condition</th><th>Resolution</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+                @if (_list.Count == 0)
+                {
+                    <TableEmptyRow Colspan="10" IconName="undo" Title="No returns found" Text="" />
+                }
+                @foreach (var r in _list)
+                {
+                    <tr class="clickable" @onclick="() => _view = r">
+                        <td class="mono b">@r.ReturnNo</td>
+                        <td class="nowrap small">@Fmt.Date(r.Date)</td>
+                        <td class="mono">@r.Sale?.InvoiceNo</td>
+                        <td><div class="li-name" style="max-width:260px">@r.SaleItem?.ProductName</div></td>
+                        <td class="r">@r.Quantity</td>
+                        <td>@r.Sale?.CustomerName</td>
+                        <td><span class="badge @(r.Condition == ItemCondition.Defective ? "red" : "green")">@r.Condition</span></td>
+                        <td>@(r.Resolution.ToString() + (r.Resolution == ReturnResolution.Refund && r.RefundAmount > 0 ? " · " + Fmt.Peso(r.RefundAmount) : ""))</td>
+                        <td><span class="badge @StatusCss(r.Status)">@r.Status</span></td>
+                        <td><div class="acts"><button class="act @(r.Status == ReturnStatus.Pending && Auth.Can(Perm.ReturnsProcess) ? "edit" : "")" title="Open"><Icon Name="@(r.Status == ReturnStatus.Pending && Auth.Can(Perm.ReturnsProcess) ? "edit" : "eye")" /></button></div></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <!-- ═══ NEW RETURN ═══ -->
+    @if (_showNew)
+    {
+        <Modal Title="New Return" Icon="undo" OnClose="() => _showNew = false">
+            <ChildContent>
+                @if (_error != null)
+                {
+                    <div class="form-error"><Icon Name="alert-circle" />@_error</div>
+                }
+                <div class="fg" style="margin-bottom:14px">
+                    <label>Receipt (OR) Number <span class="req">*</span></label>
+                    <div class="row">
+                        <input id="rt-or" style="flex:1" placeholder="e.g. OR-000125 or just 125" @bind="_orNo" @bind:event="oninput" @onkeydown="OrKey" />
+                        <button class="btn dark" @onclick="FindSale"><Icon Name="search" />Find</button>
+                    </div>
+                </div>
+
+                @if (_sale != null)
+                {
+                    <div class="note @(ReturnsSvc.IsWithinReturnWindow(_sale) ? "" : "warn")">
+                        <Icon Name="receipt" />
+                        <div>
+                            <b>@_sale.InvoiceNo</b> · @_sale.CustomerName · @Fmt.DateTimeText(_sale.Date) · @Fmt.Peso(_sale.Total)
+                            @if (!ReturnsSvc.IsWithinReturnWindow(_sale))
+                            {
+                                <div style="margin-top:4px"><b>Note:</b> this sale is older than the @(Settings.Current.ReturnWindowDays)-day return period. Check with the admin before accepting.</div>
+                            }
+                        </div>
+                    </div>
+                    <div class="form-grid">
+                        <div class="fg full">
+                            <label>Item Being Returned <span class="req">*</span></label>
+                            <select @bind="_form.SaleItemId">
+                                <option value="0">Select item…</option>
+                                @foreach (var i in _sale.Items)
+                                {
+                                    var left = _returnable.GetValueOrDefault(i.Id);
+                                    <option value="@i.Id" disabled="@(left <= 0)">@(i.ProductName + " — bought " + i.Quantity + (left <= 0 ? " (already returned)" : $", can return {left}"))</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="fg">
+                            <label>Quantity <span class="req">*</span></label>
+                            <input type="number" min="1" max="@_returnable.GetValueOrDefault(_form.SaleItemId)" @bind="_form.Quantity" />
+                        </div>
+                        <div class="fg">
+                            <label>Item Condition</label>
+                            <select @bind="_form.Condition">
+                                <option value="@ItemCondition.Defective">Defective (do not resell)</option>
+                                <option value="@ItemCondition.Resellable">Resellable (back to stock)</option>
+                            </select>
+                        </div>
+                        <div class="fg full">
+                            <label>Resolution</label>
+                            <div class="seg">
+                                <button type="button" class="@(_form.Resolution == ReturnResolution.Replacement ? "on" : "")" @onclick="() => _form.Resolution = ReturnResolution.Replacement">Replace item</button>
+                                <button type="button" class="@(_form.Resolution == ReturnResolution.Refund ? "on" : "")" @onclick="() => _form.Resolution = ReturnResolution.Refund">Refund money</button>
+                            </div>
+                            @if (SelectedItem is { } si)
+                            {
+                                <span class="hint">
+                                    @if (_form.Resolution == ReturnResolution.Refund)
+                                    {
+                                        <text>Refund about <b>@Fmt.Peso(si.UnitPrice * _form.Quantity)</b> (less any discount share).</text>
+                                    }
+                                    else
+                                    {
+                                        <text>One new unit per returned item will be taken from stock.</text>
+                                    }
+                                </span>
+                            }
+                        </div>
+                        <div class="fg full">
+                            <label>Reason / Problem <span class="req">*</span></label>
+                            <textarea placeholder="e.g. No display, dead pixels, wrong item, changed mind…" @bind="_form.Reason"></textarea>
+                        </div>
+                    </div>
+                }
+            </ChildContent>
+            <Footer>
+                <button class="btn ghost" @onclick="() => _showNew = false">Cancel</button>
+                <button class="btn primary" disabled="@(_sale == null || _busy)" @onclick="SaveNew">
+                    <Icon Name="check" />@(Auth.Can(Perm.ReturnsProcess) ? "Save & Process Return" : "Submit for Approval")
+                </button>
+            </Footer>
+        </Modal>
+    }
+
+    <!-- ═══ VIEW / PROCESS ═══ -->
+    @if (_view != null)
+    {
+        bool canProcess = _view.Status == ReturnStatus.Pending && Auth.Can(Perm.ReturnsProcess);
+        <Modal Title="@($"Return {_view.ReturnNo}")" Icon="undo" OnClose="() => _view = null">
+            <ChildContent>
+                <div class="dl" style="margin-bottom:14px">
+                    <div><span>Status</span><b><span class="badge @StatusCss(_view.Status)">@_view.Status</span></b></div>
+                    <div><span>Receipt</span><b class="mono">@_view.Sale?.InvoiceNo</b></div>
+                    <div><span>Product</span><b>@_view.SaleItem?.ProductName</b></div>
+                    <div><span>Quantity</span><b>@_view.Quantity</b></div>
+                    <div><span>Customer</span><b>@_view.Sale?.CustomerName</b></div>
+                    <div><span>Purchased</span><b>@Fmt.Date(_view.Sale?.Date)</b></div>
+                    <div><span>Condition</span><b>@_view.Condition</b></div>
+                    <div><span>Resolution</span><b>@(_view.Resolution.ToString() + (_view.RefundAmount > 0 ? " · " + Fmt.Peso(_view.RefundAmount) : ""))</b></div>
+                    <div><span>Filed by</span><b>@_view.CreatedBy?.FullName · @Fmt.DateTimeText(_view.Date)</b></div>
+                    <div><span>Processed by</span><b>@(_view.ProcessedBy == null ? "—" : $"{_view.ProcessedBy.FullName} · {Fmt.DateTimeText(_view.ProcessedAt)}")</b></div>
+                </div>
+                <div class="note"><Icon Name="info" /><div><b>Reason:</b> @_view.Reason</div></div>
+                @if (!string.IsNullOrEmpty(_view.AdminNote))
+                {
+                    <div class="note warn"><Icon Name="user" /><div><b>Admin note:</b> @_view.AdminNote</div></div>
+                }
+                @if (canProcess)
+                {
+                    <div class="fg"><label>Note (optional)</label><input placeholder="e.g. Tested, confirmed defective" @bind="_note" /></div>
+                    <p class="hint" style="margin-top:8px">
+                        Approving will: @(_view.Condition == ItemCondition.Resellable ? "put the returned item back in stock; " : "keep the defective item out of stock; ")
+                        @(_view.Resolution == ReturnResolution.Replacement ? "take a replacement unit from stock." : "record the refund for the customer.")
+                    </p>
+                }
+            </ChildContent>
+            <Footer>
+                <button class="btn ghost" @onclick="() => _view = null">Close</button>
+                @if (canProcess)
+                {
+                    <button class="btn danger-ghost" @onclick="() => Process(false)"><Icon Name="x" />Reject</button>
+                    <button class="btn success" @onclick="() => Process(true)"><Icon Name="check" />Approve &amp; Complete</button>
+                }
+            </Footer>
+        </Modal>
+    }
+}
+
+@code {
+    protected override string? Permission => Perm.Returns;
+
+    [SupplyParameterFromQuery(Name = "or")] public string? OrFromUrl { get; set; }
+
+    private List<ReturnRequest> _list = [];
+    private Dictionary<ReturnStatus, int> _counts = [];
+    private ReturnStatus? _status;
+    private string? _search;
+
+    private bool _showNew;
+    private string _orNo = "";
+    private Sale? _sale;
+    private Dictionary<int, int> _returnable = [];
+    private ReturnForm _form = new();
+    private string? _error;
+    private bool _busy;
+
+    private ReturnRequest? _view;
+    private string? _note;
+
+    private SaleItem? SelectedItem => _sale?.Items.FirstOrDefault(i => i.Id == _form.SaleItemId);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Allowed) return;
+        await Load();
+        if (!string.IsNullOrWhiteSpace(OrFromUrl)) await OpenNew(OrFromUrl);
+    }
+
+    private async Task Load()
+    {
+        _list = await ReturnsSvc.SearchAsync(_search, _status);
+        _counts = await ReturnsSvc.CountsAsync();
+    }
+
+    private async Task Filter(ReturnStatus? s)
+    {
+        _status = s;
+        await Load();
+    }
+
+    private static string StatusCss(ReturnStatus s) => s switch
+    {
+        ReturnStatus.Pending => "amber",
+        ReturnStatus.Completed => "green",
+        _ => "red"
+    };
+
+    private async Task OpenNew(string? orNo)
+    {
+        _error = null;
+        _sale = null;
+        _form = new ReturnForm();
+        _orNo = orNo ?? "";
+        _showNew = true;
+        if (!string.IsNullOrWhiteSpace(orNo)) await FindSale();
+    }
+
+    private async Task OrKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await FindSale();
+    }
+
+    private async Task FindSale()
+    {
+        _error = null;
+        _sale = null;
+        if (string.IsNullOrWhiteSpace(_orNo)) { _error = "Enter the receipt number."; return; }
+        var sale = await SalesSvc.GetByInvoiceAsync(_orNo);
+        if (sale == null) { _error = "Receipt not found. Check the OR number."; return; }
+        if (sale.Status == SaleStatus.Voided) { _error = "This sale was voided, so it cannot be returned."; return; }
+        // Staff may file returns for any receipt, even if another cashier made the sale.
+        _sale = sale;
+        _orNo = sale.InvoiceNo;
+        _returnable = await ReturnsSvc.ReturnableQtyAsync(sale);
+        _form = new ReturnForm { SaleId = sale.Id };
+        var first = sale.Items.FirstOrDefault(i => _returnable.GetValueOrDefault(i.Id) > 0);
+        if (first != null) _form.SaleItemId = first.Id;
+    }
+
+    private async Task SaveNew()
+    {
+        _busy = true;
+        var (req, error) = await ReturnsSvc.CreateAsync(_form);
+        _busy = false;
+        if (req == null) { _error = error; return; }
+        if (error != null) Toast.Warning(error);
+        else Toast.Success(Auth.Can(Perm.ReturnsProcess) ? $"{req.ReturnNo} was processed." : $"{req.ReturnNo} was sent for approval.");
+        _showNew = false;
+        await Load();
+    }
+
+    private async Task Process(bool approve)
+    {
+        if (_view == null) return;
+        if (!approve && !await Confirm.Ask($"Reject {_view.ReturnNo}?", "The customer keeps the item and nothing changes in stock.", "Reject")) return;
+        var err = await ReturnsSvc.ProcessAsync(_view.Id, approve, _note);
+        if (!Ok(err, approve ? $"{_view.ReturnNo} completed." : $"{_view.ReturnNo} rejected.")) return;
+        _view = null;
+        _note = null;
+        await Load();
+    }
+}

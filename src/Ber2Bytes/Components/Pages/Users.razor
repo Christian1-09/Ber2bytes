@@ -1,0 +1,150 @@
+@page "/users"
+@inherits AppPageBase
+@inject UserService UsersSvc
+
+@if (Allowed)
+{
+    <PageHeader Title="User Management" Subtitle="Create accounts for your staff and administrators">
+        <Actions>
+            <button class="btn primary" @onclick="() => Open(null)"><Icon Name="plus" />Add User</button>
+        </Actions>
+    </PageHeader>
+
+    <div class="tbl-card">
+        <table>
+            <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th><th>Last Login</th><th>Created</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var u in _users)
+                {
+                    <tr>
+                        <td>
+                            <div class="prod-cell">
+                                <div class="avatar sm" style="background:@(u.Role == UserRole.Admin ? "var(--red)" : "var(--ink)")">@Fmt.Initials(u.FullName)</div>
+                                <div class="prod-name">@u.FullName @if (u.Id == Auth.UserId) { <span class="badge gray">You</span> }</div>
+                            </div>
+                        </td>
+                        <td class="mono">@u.Username</td>
+                        <td><span class="badge @(u.Role == UserRole.Admin ? "red" : "dark")">@(u.Role == UserRole.Admin ? "Administrator" : "Staff")</span></td>
+                        <td><span class="badge @(u.IsActive ? "green" : "gray")">@(u.IsActive ? "Active" : "Disabled")</span></td>
+                        <td class="small muted">@Fmt.DateTimeText(u.LastLoginAt)</td>
+                        <td class="small muted">@Fmt.Date(u.CreatedAt)</td>
+                        <td>
+                            <div class="acts">
+                                <button class="act edit" title="Edit" @onclick="() => Open(u)"><Icon Name="edit" /></button>
+                                <button class="act" title="Reset password" @onclick="() => ResetPassword(u)"><Icon Name="key" /></button>
+                                @if (u.Id != Auth.UserId)
+                                {
+                                    <button class="act @(u.IsActive ? "del" : "ok")" title="@(u.IsActive ? "Disable account" : "Enable account")" @onclick="() => Toggle(u)"><Icon Name="toggle" /></button>
+                                    <button class="act del" title="Delete" @onclick="() => Delete(u)"><Icon Name="trash" /></button>
+                                }
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card card-pad" style="margin-top:18px">
+        <h3 style="font-size:15px;margin-bottom:10px">What each role can do</h3>
+        <div class="grid-2" style="margin-bottom:0">
+            <div>
+                <span class="badge red" style="margin-bottom:8px">Administrator</span>
+                <p class="small" style="line-height:1.7">Everything: products and prices (with cost and profit), stock in and adjustments, all sales and voids, approving returns, all reports (sales, best sellers, dead stock, valuation), suppliers, categories, users, activity log, settings and backups.</p>
+            </div>
+            <div>
+                <span class="badge dark" style="margin-bottom:8px">Staff</span>
+                <p class="small" style="line-height:1.7">Point of sale (discount up to the limit in Settings), view products and stock (no cost prices), receive stock (Stock In), see their own sales, file returns for admin approval, view suppliers, and print/export the Low Stock list for suppliers.</p>
+            </div>
+        </div>
+    </div>
+
+    @if (_form != null)
+    {
+        <Modal Title="@(_form.Id == 0 ? "Add User" : "Edit User")" Icon="user" OnClose="() => _form = null">
+            <ChildContent>
+                @if (_error != null)
+                {
+                    <div class="form-error"><Icon Name="alert-circle" />@_error</div>
+                }
+                <div class="form-grid">
+                    <div class="fg full"><label>Full Name <span class="req">*</span></label><input @bind="_form.FullName" /></div>
+                    <div class="fg"><label>Username <span class="req">*</span></label><input autocomplete="off" @bind="_form.Username" /><span class="hint">Letters, numbers, dot or underscore</span></div>
+                    <div class="fg">
+                        <label>Role <span class="req">*</span></label>
+                        <select @bind="_form.Role" disabled="@(_form.Id == Auth.UserId)">
+                            <option value="@UserRole.Staff">Staff</option>
+                            <option value="@UserRole.Admin">Administrator</option>
+                        </select>
+                    </div>
+                    <div class="fg full">
+                        <label>Password @if (_form.Id == 0) { <span class="req">*</span> }</label>
+                        <input type="password" autocomplete="new-password" @bind="_form.Password" />
+                        <span class="hint">@(_form.Id == 0 ? "At least 6 characters" : "Leave blank to keep the current password")</span>
+                    </div>
+                    <div class="fg full">
+                        <label class="check"><input type="checkbox" @bind="_form.IsActive" disabled="@(_form.Id == Auth.UserId)" />Account is active (can sign in)</label>
+                    </div>
+                </div>
+            </ChildContent>
+            <Footer>
+                <button class="btn ghost" @onclick="() => _form = null">Cancel</button>
+                <button class="btn primary" @onclick="Save"><Icon Name="check" />Save User</button>
+            </Footer>
+        </Modal>
+    }
+}
+
+@code {
+    protected override string? Permission => Perm.Users;
+
+    private List<User> _users = [];
+    private UserForm? _form;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Allowed) return;
+        await Load();
+    }
+
+    private async Task Load() => _users = await UsersSvc.GetAllAsync();
+
+    private void Open(User? u)
+    {
+        _error = null;
+        _form = u == null ? new UserForm() : new UserForm { Id = u.Id, FullName = u.FullName, Username = u.Username, Role = u.Role, IsActive = u.IsActive };
+    }
+
+    private async Task Save()
+    {
+        if (_form == null) return;
+        _error = await UsersSvc.SaveAsync(_form);
+        if (_error != null) return;
+        Toast.Success($"User \"{_form.FullName}\" saved.");
+        _form = null;
+        await Load();
+    }
+
+    private async Task ResetPassword(User u)
+    {
+        var pw = await Confirm.AskText($"Reset password for {u.FullName}?",
+            "Give the new password to the user and ask them to change it after signing in (user menu → Change my password).",
+            "New password (min. 6 characters)", "Reset Password", danger: false, password: true);
+        if (pw == null) return;
+        Ok(await UsersSvc.ResetPasswordAsync(u.Id, pw), $"Password for {u.FullName} was reset.");
+    }
+
+    private async Task Toggle(User u)
+    {
+        if (Ok(await UsersSvc.ToggleActiveAsync(u.Id), $"{u.FullName} was {(u.IsActive ? "disabled" : "enabled")}."))
+            await Load();
+    }
+
+    private async Task Delete(User u)
+    {
+        if (!await Confirm.Ask($"Delete {u.FullName}?", "This account will be removed permanently.", "Delete")) return;
+        if (Ok(await UsersSvc.DeleteAsync(u.Id), "User deleted."))
+            await Load();
+    }
+}

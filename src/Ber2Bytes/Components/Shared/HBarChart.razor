@@ -1,0 +1,24 @@
+@* Horizontal bars (e.g. sales by category). *@
+@if (Points.Count == 0)
+{
+    <div class="chart-empty">No sales this month yet</div>
+}
+else
+{
+    var max = Points.Max(p => p.Value);
+    <div class="hbars">
+        @foreach (var p in Points)
+        {
+            var pct = max == 0 ? 0 : (double)(p.Value / max) * 100;
+            <div class="hbar-row" title="@($"{p.Label}: {Fmt.Peso(p.Value)}")">
+                <span class="lbl">@p.Label</span>
+                <div class="hbar-track"><div class="hbar-fill" style="width:@(pct.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%"></div></div>
+                <span class="val">@Fmt.PesoShort(p.Value)</span>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public List<ChartPoint> Points { get; set; } = [];
+}

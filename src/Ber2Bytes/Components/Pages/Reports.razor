@@ -1,0 +1,270 @@
+@page "/reports"
+@inherits AppPageBase
+@inject ReportService ReportsSvc
+@inject ExportService Export
+@inject CatalogService Catalog
+
+@if (Allowed)
+{
+    <PageHeader Title="@("Reports & Analytics")" Subtitle="Preview a report, then save it as PDF (to print or send) or Excel" />
+
+    <div class="rep-grid">
+        @foreach (var (type, info) in VisibleReports)
+        {
+            <div class="card rep-card @(type == _type ? "on" : "")" @onclick="() => Select(type)">
+                <div class="ric"><Icon Name="@info.Icon" /></div>
+                <h4>@info.Name</h4>
+                <p>@info.Description</p>
+            </div>
+        }
+    </div>
+
+    <div class="card card-pad">
+        <div class="toolbar">
+            <h3 style="font-size:17px;margin-right:8px">@ReportService.Catalog[_type].Name</h3>
+
+            @if (_type is ReportType.Sales or ReportType.TopProducts)
+            {
+                <select @bind="_preset" @bind:after="PresetChanged">
+                    <option value="today">Today</option>
+                    <option value="7">Last 7 days</option>
+                    <option value="30">Last 30 days</option>
+                    <option value="month">This month</option>
+                    <option value="lastmonth">Last month</option>
+                    <option value="year">This year</option>
+                    <option value="custom">Custom…</option>
+                </select>
+                <label>From</label><input type="date" @bind="_o.From" @bind:after="CustomDate" />
+                <label>To</label><input type="date" @bind="_o.To" @bind:after="CustomDate" />
+            }
+            @if (_type == ReportType.SlowMoving)
+            {
+                <label>No sales in the last</label>
+                <select @bind="_o.Days" @bind:after="Build">
+                    <option value="30">30 days</option>
+                    <option value="60">60 days</option>
+                    <option value="90">90 days</option>
+                    <option value="180">180 days</option>
+                    <option value="365">1 year</option>
+                </select>
+                <select @bind="_o.Slow" @bind:after="Build">
+                    <option value="@SlowFilter.All">Dead + slow-moving</option>
+                    <option value="@SlowFilter.DeadOnly">Dead stock only</option>
+                    <option value="@SlowFilter.SlowOnly">Slow-moving only</option>
+                </select>
+            }
+            @if (_type is ReportType.SlowMoving or ReportType.Valuation)
+            {
+                <select @bind="_o.CategoryId" @bind:after="Build">
+                    <option value="">All categories</option>
+                    @foreach (var c in _categories) { <option value="@c.Id">@c.Name</option> }
+                </select>
+            }
+            @if (_type == ReportType.LowStock)
+            {
+                <select value="@SupplierValue" @onchange="SupplierChanged">
+                    <option value="">All suppliers</option>
+                    @foreach (var s in _suppliers) { <option value="@s.Id">@s.Name</option> }
+                    <option value="none">No supplier assigned</option>
+                </select>
+            }
+
+            <span class="spacer"></span>
+            <button class="btn ghost" disabled="@(_report == null || _busy)" @onclick="ToExcel"><Icon Name="excel" />Export Excel</button>
+            <button class="btn primary" disabled="@(_report == null || _busy)" @onclick="ToPdf"><Icon Name="printer" />Print / Save PDF</button>
+        </div>
+
+        @if (_report == null)
+        {
+            <div class="empty"><p>Building report…</p></div>
+        }
+        else
+        {
+            <div class="muted small" style="margin-bottom:12px">@_report.Subtitle · @_report.Rows.Count row(s)</div>
+            @if (_report.Summary.Count > 0)
+            {
+                <div class="chips">
+                    @foreach (var (label, value) in _report.Summary)
+                    {
+                        <div class="chip"><div class="chip-l">@label</div><div class="chip-v" style="font-size:16px">@value</div></div>
+                    }
+                </div>
+            }
+            <div class="tbl-card" style="box-shadow:none">
+                <table class="compact">
+                    <thead>
+                        <tr>
+                            @foreach (var c in _report.Columns)
+                            {
+                                <th class="@(IsRight(c.Kind) ? "r" : "")">@c.Header</th>
+                            }
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (_report.Rows.Count == 0)
+                        {
+                            <TableEmptyRow Colspan="_report.Columns.Count" IconName="check" Title="Nothing to report" Text="No records for the selected filters." />
+                        }
+                        @foreach (var row in _report.Rows)
+                        {
+                            <tr>
+                                @for (int i = 0; i < _report.Columns.Count; i++)
+                                {
+                                    var col = _report.Columns[i];
+                                    var text = ExportService.FormatCell(i < row.Length ? row[i] : null, col.Kind);
+                                    if (col.Kind == ColKind.Status)
+                                    {
+                                        <td><span class="badge @(text.Contains("Out") || text.Contains("Dead") ? "red" : "amber")">@text</span></td>
+                                    }
+                                    else
+                                    {
+                                        <td class="@(IsRight(col.Kind) ? "r" : "") @(col.Kind == ColKind.Mono ? "mono" : "") @(col.Kind is ColKind.Date ? "nowrap" : "")">@text</td>
+                                    }
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                    @if (_report.Totals != null && _report.Rows.Count > 0)
+                    {
+                        <tfoot>
+                            <tr>
+                                @for (int i = 0; i < _report.Columns.Count; i++)
+                                {
+                                    var col = _report.Columns[i];
+                                    <td class="@(IsRight(col.Kind) ? "r" : "")">@ExportService.FormatCell(i < _report.Totals.Length ? _report.Totals[i] : null, col.Kind)</td>
+                                }
+                            </tr>
+                        </tfoot>
+                    }
+                </table>
+            </div>
+            @if (!string.IsNullOrEmpty(_report.Note))
+            {
+                <div class="note" style="margin-top:14px;margin-bottom:0"><Icon Name="info" />@_report.Note</div>
+            }
+        }
+    </div>
+}
+
+@code {
+    protected override string? Permission => Perm.Reports;
+
+    [SupplyParameterFromQuery(Name = "type")] public string? TypeFromUrl { get; set; }
+    [SupplyParameterFromQuery(Name = "supplier")] public int? SupplierFromUrl { get; set; }
+
+    private ReportType _type = ReportType.Sales;
+    private readonly ReportOptions _o = new();
+    private string _preset = "30";
+    private ReportResult? _report;
+    private bool _busy;
+    private List<Category> _categories = [];
+    private List<Supplier> _suppliers = [];
+
+    private IEnumerable<(ReportType Type, (string Name, string Icon, string Description, string Perm) Info)> VisibleReports =>
+        ReportService.Catalog.Where(kv => Auth.Can(kv.Value.Perm)).Select(kv => (kv.Key, kv.Value));
+
+    private string SupplierValue => _o.NoSupplierOnly ? "none" : _o.SupplierId?.ToString() ?? "";
+
+    private static bool IsRight(ColKind k) => k is ColKind.Money or ColKind.Number;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Allowed) return;
+        _categories = await Catalog.GetCategoriesAsync();
+        _suppliers = await Catalog.GetSuppliersAsync();
+        _o.Days = Settings.Current.DeadStockDays;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!Allowed) return;
+        if (Enum.TryParse<ReportType>(TypeFromUrl, true, out var t)) _type = t;
+        if (SupplierFromUrl.HasValue) { _o.SupplierId = SupplierFromUrl; _o.NoSupplierOnly = false; }
+        // Staff can only open the reports their role allows.
+        if (!Auth.Can(ReportService.Catalog[_type].Perm)) _type = ReportType.LowStock;
+        ApplyPreset();
+        await Build();
+    }
+
+    private async Task Select(ReportType t)
+    {
+        _type = t;
+        await Build();
+    }
+
+    private void ApplyPreset()
+    {
+        var today = DateTime.Today;
+        switch (_preset)
+        {
+            case "today": _o.From = today; _o.To = today; break;
+            case "7": _o.From = today.AddDays(-6); _o.To = today; break;
+            case "30": _o.From = today.AddDays(-29); _o.To = today; break;
+            case "month": _o.From = new DateTime(today.Year, today.Month, 1); _o.To = today; break;
+            case "lastmonth":
+                var first = new DateTime(today.Year, today.Month, 1).AddMonths(-1);
+                _o.From = first; _o.To = first.AddMonths(1).AddDays(-1); break;
+            case "year": _o.From = new DateTime(today.Year, 1, 1); _o.To = today; break;
+        }
+    }
+
+    private async Task PresetChanged()
+    {
+        ApplyPreset();
+        await Build();
+    }
+
+    private async Task CustomDate()
+    {
+        _preset = "custom";
+        if (_o.To < _o.From) (_o.From, _o.To) = (_o.To, _o.From);
+        await Build();
+    }
+
+    private async Task SupplierChanged(ChangeEventArgs e)
+    {
+        var v = e.Value?.ToString();
+        _o.NoSupplierOnly = v == "none";
+        _o.SupplierId = int.TryParse(v, out var id) ? id : null;
+        await Build();
+    }
+
+    private async Task Build()
+    {
+        try
+        {
+            _report = await ReportsSvc.BuildAsync(_type, _o);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Report failed", ex);
+            Toast.Error("Could not build the report: " + ex.Message);
+        }
+    }
+
+    private async Task ToPdf()
+    {
+        if (_report == null) return;
+        _busy = true;
+        try
+        {
+            var path = await Export.SavePdfAsync(_report);
+            if (path != null) Toast.Success("PDF saved and opened. Use Print in the PDF viewer to print it.");
+        }
+        catch (Exception ex) { AppLog.Error("PDF export failed", ex); Toast.Error("Could not create the PDF: " + ex.Message); }
+        finally { _busy = false; }
+    }
+
+    private async Task ToExcel()
+    {
+        if (_report == null) return;
+        _busy = true;
+        try
+        {
+            var path = await Export.SaveExcelAsync(_report);
+            if (path != null) Toast.Success("Excel file saved.");
+        }
+        catch (Exception ex) { AppLog.Error("Excel export failed", ex); Toast.Error("Could not create the Excel file: " + ex.Message); }
+        finally { _busy = false; }
+    }
+}

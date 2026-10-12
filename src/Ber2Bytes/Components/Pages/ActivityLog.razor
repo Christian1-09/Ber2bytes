@@ -1,0 +1,59 @@
+@page "/activity"
+@inherits AppPageBase
+@inject AuditService AuditSvc
+
+@if (Allowed)
+{
+    <PageHeader Title="Activity Log" Subtitle="Who did what and when — sales, price changes, voids, stock changes, logins" />
+
+    <div class="toolbar">
+        <div class="search-box"><Icon Name="search" /><input placeholder="Search user, action or details…" @bind="_search" @bind:event="oninput" @bind:after="Load" /></div>
+        <label>From</label><input type="date" @bind="_from" @bind:after="Load" />
+        <label>To</label><input type="date" @bind="_to" @bind:after="Load" />
+        <span class="spacer"></span>
+        <span class="count-note">Latest @_rows.Count entries</span>
+    </div>
+
+    <div class="tbl-card">
+        <table>
+            <thead><tr><th>Date &amp; Time</th><th>User</th><th>Action</th><th>Details</th></tr></thead>
+            <tbody>
+                @if (_rows.Count == 0)
+                {
+                    <TableEmptyRow Colspan="4" IconName="log" Title="No activity found" />
+                }
+                @foreach (var a in _rows)
+                {
+                    <tr>
+                        <td class="nowrap small">@Fmt.DateTimeText(a.Date)</td>
+                        <td>@a.UserName</td>
+                        <td><span class="badge @Css(a.Action)">@a.Action</span></td>
+                        <td class="small" style="color:var(--g700)">@a.Details</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    protected override string? Permission => Perm.Audit;
+    private List<AuditLog> _rows = [];
+    private string? _search;
+    private DateTime? _from;
+    private DateTime? _to;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Allowed) return;
+        await Load();
+    }
+
+    private async Task Load() => _rows = await AuditSvc.SearchAsync(_search, _from, _to);
+
+    private static string Css(string action) =>
+        action.Contains("Void") || action.Contains("Delete") || action.Contains("locked") || action.Contains("reject", StringComparison.OrdinalIgnoreCase) ? "red"
+        : action.Contains("Sale") ? "green"
+        : action.Contains("Edit") || action.Contains("adjust", StringComparison.OrdinalIgnoreCase) || action.Contains("Settings") ? "amber"
+        : "gray";
+}

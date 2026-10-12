@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+	  <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+	  <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Ber2Bytes</RootNamespace>
+    <AssemblyName>Ber2Bytes</AssemblyName>
+    <Product>Ber2Bytes Inventory and Sales Tracking System</Product>
+    <Version>1.0.0</Version>
+    <!-- Put your .ico file in wwwroot/images and uncomment:
+    <ApplicationIcon>wwwroot\images\app.ico</ApplicationIcon> -->
+  </PropertyGroup>
+
+  <!-- WPF projects don't import System.IO automatically -->
+  <ItemGroup>
+    <Using Include="System.IO" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Blazor inside WPF -->
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Wpf" Version="10.0.*" />
+    <!-- Offline database -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.*" />
+    <!-- Password hashing -->
+    <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
+    <!-- Excel export (.xlsx) -->
+    <PackageReference Include="ClosedXML" Version="0.105.*" />
+    <!-- PDF export -->
+    <PackageReference Include="QuestPDF" Version="2025.*" />
+  </ItemGroup>
+
+</Project>

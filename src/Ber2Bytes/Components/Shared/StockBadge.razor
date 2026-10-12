@@ -1,0 +1,18 @@
+@* In Stock / Low Stock / Out of Stock badge *@
+@if (Stock <= 0)
+{
+    <span class="badge red">Out of Stock</span>
+}
+else if (Stock <= Reorder)
+{
+    <span class="badge amber">Low Stock</span>
+}
+else
+{
+    <span class="badge green">In Stock</span>
+}
+
+@code {
+    [Parameter] public int Stock { get; set; }
+    [Parameter] public int Reorder { get; set; }
+}

@@ -1,0 +1,20 @@
+@* Product photo, or the category icon on a tinted background when there is no photo. *@
+<div class="@CssClass" style="@(ImageUrl == null ? $"background:{Color}18;color:{Color}" : "")">
+    @if (ImageUrl != null)
+    {
+        <img src="@ImageUrl" alt="" loading="lazy" />
+    }
+    else
+    {
+        <Icon Name="@IconName" />
+    }
+</div>
+
+@code {
+    [Parameter] public string? ImageFile { get; set; }
+    [Parameter] public string IconName { get; set; } = "box";
+    [Parameter] public string Color { get; set; } = "#E11D2A";
+    [Parameter] public string CssClass { get; set; } = "thumb";
+
+    private string? ImageUrl => ImageService.Url(ImageFile);
+}

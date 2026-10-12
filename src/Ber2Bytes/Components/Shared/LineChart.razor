@@ -1,0 +1,67 @@
+@using System.Globalization
+@* Simple SVG line chart with a soft red area underneath. The highest point gets a value tag. *@
+@if (Points.Count == 0 || Points.All(p => p.Value == 0))
+{
+    <div class="chart-empty">No sales in this period yet</div>
+}
+else
+{
+    var max = ChartMath.NiceMax(Points.Max(p => p.Value));
+    var plotW = W - Left - 14;
+    var plotH = H - Top - Bottom;
+    var step = Points.Count > 1 ? plotW / (Points.Count - 1) : 0;
+    var xy = Points.Select((p, i) => (X: Left + step * i, Y: Top + plotH - (max == 0 ? 0 : (double)(p.Value / max) * plotH))).ToList();
+    var line = string.Join(" ", xy.Select(q => $"{F(q.X)},{F(q.Y)}"));
+    var area = $"M{F(xy[0].X)},{F(Top + plotH)} L" + string.Join(" L", xy.Select(q => $"{F(q.X)},{F(q.Y)}")) + $" L{F(xy[^1].X)},{F(Top + plotH)} Z";
+    var peak = Points.IndexOf(Points.MaxBy(p => p.Value)!);
+
+    <svg class="chart" viewBox="0 0 @F(W) @F(H)" preserveAspectRatio="xMidYMid meet">
+        <defs>
+            <linearGradient id="@_gradId" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#E11D2A" stop-opacity="0.22" />
+                <stop offset="100%" stop-color="#E11D2A" stop-opacity="0.02" />
+            </linearGradient>
+        </defs>
+        @for (int t = 0; t <= 4; t++)
+        {
+            var y = Top + plotH - plotH * t / 4.0;
+            var label = ChartMath.Short(max * t / 4);
+            <g>
+                <line class="grid-line" x1="@F(Left)" x2="@F(W - 8)" y1="@F(y)" y2="@F(y)" />
+                <text class="tick" x="@F(Left - 8)" y="@F(y + 4)" text-anchor="end">@label</text>
+            </g>
+        }
+        <path d="@area" fill="url(#@_gradId)" />
+        <polyline class="line" points="@line" />
+        @for (int i = 0; i < Points.Count; i++)
+        {
+            var p = Points[i];
+            var q = xy[i];
+            <g>
+                <circle class="pt" cx="@F(q.X)" cy="@F(q.Y)" r="@(i == peak ? "6" : "4")">
+                    <title>@(p.Tooltip ?? $"{p.Label}: {Fmt.Peso(p.Value)}")</title>
+                </circle>
+                <text class="tick" x="@F(q.X)" y="@F(H - 6)" text-anchor="middle">@p.Label</text>
+                @if (i == peak)
+                {
+                    var tag = Fmt.Peso(p.Value).Replace(".00", "");
+                    var tw = tag.Length * 6.6 + 14;
+                    var tx = Math.Clamp(q.X - tw / 2, Left, W - tw - 4);
+                    <g class="tag">
+                        <rect x="@F(tx)" y="@F(q.Y - 30)" width="@F(tw)" height="19" rx="4" />
+                        <text x="@F(tx + tw / 2)" y="@F(q.Y - 16.5)" text-anchor="middle">@tag</text>
+                    </g>
+                }
+            </g>
+        }
+    </svg>
+}
+
+@code {
+    [Parameter] public List<ChartPoint> Points { get; set; } = [];
+
+    private const double W = 520, H = 220, Left = 46, Top = 34, Bottom = 26;
+    private readonly string _gradId = "g" + Guid.NewGuid().ToString("N")[..8];
+
+    private static string F(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+}

@@ -1,0 +1,400 @@
+@page "/products"
+@inherits AppPageBase
+@inject CatalogService Catalog
+@inject InventoryService Inventory
+@inject ExportService Export
+
+@if (Allowed)
+{
+    <PageHeader Title="Products" Subtitle="Your product list with photos, prices and stock levels">
+        <Actions>
+            <button class="btn ghost" @onclick="ExportExcel"><Icon Name="excel" />Export Excel</button>
+            @if (Auth.Can(Perm.ProductsManage))
+            {
+                <button class="btn primary" @onclick="() => OpenForm(null)"><Icon Name="plus" />Add Product</button>
+            }
+        </Actions>
+    </PageHeader>
+
+    <div class="toolbar">
+        <div class="search-box"><Icon Name="search" /><input placeholder="Search name, SKU, barcode, brand…" @bind="_q.Search" @bind:event="oninput" @bind:after="Load" /></div>
+        <select @bind="_q.CategoryId" @bind:after="Load">
+            <option value="">All categories</option>
+            @foreach (var c in _categories) { <option value="@c.Id">@c.Name</option> }
+        </select>
+        <select @bind="_q.Stock" @bind:after="Load">
+            <option value="@StockFilter.All">All stock status</option>
+            <option value="@StockFilter.InStock">In Stock</option>
+            <option value="@StockFilter.LowStock">Low Stock</option>
+            <option value="@StockFilter.OutOfStock">Out of Stock</option>
+        </select>
+        <select @bind="_q.Sort" @bind:after="Load">
+            <option value="name">Sort: Name (A–Z)</option>
+            <option value="stock">Sort: Stock (low → high)</option>
+            <option value="price">Sort: Price (high → low)</option>
+            <option value="newest">Sort: Newest first</option>
+        </select>
+        @if (Auth.Can(Perm.ProductsManage))
+        {
+            <label class="check"><input type="checkbox" @bind="_q.IncludeArchived" @bind:after="Load" />Show archived</label>
+        }
+        @if (_q.SupplierId != null)
+        {
+            <span class="badge dark">Supplier: @(_suppliers.FirstOrDefault(x => x.Id == _q.SupplierId)?.Name) <a href="products" style="margin-left:6px">✕</a></span>
+        }
+        <span class="spacer"></span>
+        <span class="count-note">@_list.Count product(s)</span>
+    </div>
+
+    <div class="tbl-card">
+        <table>
+            <thead>
+                <tr>
+                    <th>Product</th><th>Category</th><th>Brand</th>
+                    @if (Auth.Can(Perm.ViewCost)) { <th class="r">Cost</th> }
+                    <th class="r">Price</th><th class="r">Stock / Reorder</th><th>Status</th><th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (_list.Count == 0)
+                {
+                    <TableEmptyRow Colspan="8" Title="No products found" />
+                }
+                @foreach (var p in _list)
+                {
+                    <tr style="@(p.IsArchived ? "opacity:.55" : "")">
+                        <td>
+                            <div class="prod-cell">
+                                <ProductThumb ImageFile="@p.ImageFile" IconName="@(p.Category?.Icon ?? "box")" Color="@(p.Category?.Color ?? "#E11D2A")" />
+                                <div>
+                                    <div class="prod-name">@p.Name @if (p.IsArchived) { <span class="badge gray">Archived</span> }</div>
+                                    <div class="prod-sku">@(p.Sku + (p.Barcode != null ? " · " + p.Barcode : ""))</div>
+                                </div>
+                            </div>
+                        </td>
+                        <td>@p.Category?.Name</td>
+                        <td>@p.Brand</td>
+                        @if (Auth.Can(Perm.ViewCost)) { <td class="r mono">@Fmt.Peso(p.CostPrice)</td> }
+                        <td class="r mono b">@Fmt.Peso(p.SellingPrice)</td>
+                        <td class="r mono"><span class="@(p.Stock <= p.ReorderLevel ? "t-red" : "")">@p.Stock</span><span class="muted"> / @p.ReorderLevel</span></td>
+                        <td><StockBadge Stock="p.Stock" Reorder="p.ReorderLevel" /></td>
+                        <td>
+                            <div class="acts">
+                                <button class="act" title="View details" @onclick="() => View(p)"><Icon Name="eye" /></button>
+                                @if (!p.IsArchived && Auth.Can(Perm.StockIn))
+                                {
+                                    <button class="act ok" title="Stock in" @onclick="() => _stockInFor = p.Id"><Icon Name="download" /></button>
+                                }
+                                @if (Auth.Can(Perm.ProductsManage))
+                                {
+                                    if (p.IsArchived)
+                                    {
+                                        <button class="act ok" title="Restore" @onclick="() => Restore(p)"><Icon Name="refresh" /></button>
+                                    }
+                                    else
+                                    {
+                                        <button class="act edit" title="Edit" @onclick="() => OpenForm(p)"><Icon Name="edit" /></button>
+                                        <button class="act del" title="Delete / archive" @onclick="() => Delete(p)"><Icon Name="trash" /></button>
+                                    }
+                                }
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <!-- ═══ ADD / EDIT ═══ -->
+    @if (_form != null)
+    {
+        <Modal Title="@(_form.Id == 0 ? "Add Product" : "Edit Product")" Icon="box" Size="lg" OnClose="() => _form = null">
+            <ChildContent>
+                @if (_formError != null)
+                {
+                    <div class="form-error"><Icon Name="alert-circle" />@_formError</div>
+                }
+                <div class="pf">
+                    <div>
+                        <label for="pf-file" class="img-drop @(PreviewUrl != null ? "has-img" : "")" title="Click to choose a photo">
+                            @if (PreviewUrl != null)
+                            {
+                                <img src="@PreviewUrl" alt="" />
+                            }
+                            else
+                            {
+                                <Icon Name="image" Class="xl" />
+                                <span>Click to upload a product photo</span>
+                            }
+                        </label>
+                        <InputFile id="pf-file" class="hidden" accept="image/png,image/jpeg,image/webp,image/bmp" OnChange="OnImagePicked" />
+                        <div class="row" style="margin:10px 0 6px">
+                            <label for="pf-file" class="btn ghost sm"><Icon Name="upload" />Upload</label>
+                            <button class="btn ghost sm" disabled="@(PreviewUrl == null)" @onclick="RemoveImage">Remove</button>
+                        </div>
+                        <p class="hint">JPG or PNG, up to 8 MB. It is resized automatically.</p>
+                    </div>
+                    <div class="form-grid">
+                        <div class="fg full"><label>Product Name <span class="req">*</span></label><input id="pf-name" placeholder="e.g. ASUS TUF Gaming F15 i7 / 16GB / RTX 4060" @bind="_form.Name" /></div>
+                        <div class="fg"><label>SKU <span class="req">*</span></label><input placeholder="e.g. LP-ASU-TUF15" style="text-transform:uppercase" @bind="_form.Sku" /><span class="hint">Your own unique product code</span></div>
+                        <div class="fg"><label>Barcode</label><input placeholder="Scan or type the barcode" @bind="_form.Barcode" /></div>
+                        <div class="fg">
+                            <label>Category <span class="req">*</span></label>
+                            <select @bind="_form.CategoryId">
+                                <option value="0">Select category…</option>
+                                @foreach (var c in _categories) { <option value="@c.Id">@c.Name</option> }
+                            </select>
+                        </div>
+                        <div class="fg"><label>Brand</label><input placeholder="e.g. ASUS" @bind="_form.Brand" /></div>
+                        <div class="fg">
+                            <label>Supplier</label>
+                            <select @bind="_form.SupplierId">
+                                <option value="">— None —</option>
+                                @foreach (var s in _suppliers) { <option value="@s.Id">@s.Name</option> }
+                            </select>
+                        </div>
+                        <div class="fg"><label>Reorder Level</label><input type="number" min="0" @bind="_form.ReorderLevel" /><span class="hint">Alert when stock reaches this number</span></div>
+                        <div class="fg"><label>Cost Price (₱) <span class="req">*</span></label><input type="number" min="0" step="0.01" @bind="_form.CostPrice" @bind:event="oninput" /></div>
+                        <div class="fg">
+                            <label>Selling Price (₱) <span class="req">*</span></label>
+                            <input type="number" min="0" step="0.01" @bind="_form.SellingPrice" @bind:event="oninput" />
+                            @if (_form.SellingPrice > 0)
+                            {
+                                var margin = _form.SellingPrice - _form.CostPrice;
+                                <span class="hint">Profit per unit: <b class="@(margin < 0 ? "t-red" : "t-green")">@Fmt.Peso(margin)@(_form.CostPrice > 0 ? $" ({margin / _form.CostPrice * 100:0}% markup)" : "")</b></span>
+                            }
+                        </div>
+                        @if (_form.Id == 0)
+                        {
+                            <div class="fg"><label>Opening Stock</label><input type="number" min="0" @bind="_form.Stock" /><span class="hint">Quantity on hand right now</span></div>
+                        }
+                        else
+                        {
+                            <div class="fg"><label>Current Stock</label><input disabled value="@_form.Stock" /><span class="hint">Change stock in Inventory (Stock In / Adjust)</span></div>
+                        }
+                        <div class="fg full"><label>Description / Specs</label><textarea placeholder="Key specs shown in the product details…" @bind="_form.Description"></textarea></div>
+                    </div>
+                </div>
+            </ChildContent>
+            <Footer>
+                <button class="btn ghost" @onclick="() => _form = null">Cancel</button>
+                <button class="btn primary" disabled="@_busy" @onclick="Save"><Icon Name="check" />@(_busy ? "Saving…" : "Save Product")</button>
+            </Footer>
+        </Modal>
+    }
+
+    <!-- ═══ DETAILS ═══ -->
+    @if (_view != null)
+    {
+        <Modal Title="Product Details" Icon="eye" Size="lg" OnClose="() => _view = null">
+            <ChildContent>
+                <div class="row" style="align-items:flex-start;gap:22px">
+                    <ProductThumb ImageFile="@_view.ImageFile" IconName="@(_view.Category?.Icon ?? "box")" Color="@(_view.Category?.Color ?? "#E11D2A")" CssClass="thumb lg" />
+                    <div style="flex:1">
+                        <h2 style="font-size:19px;margin-bottom:4px">@_view.Name</h2>
+                        <div class="prod-sku" style="margin-bottom:10px">@_view.Sku · Barcode @(_view.Barcode ?? "—")</div>
+                        <div class="row" style="margin-bottom:14px">
+                            <span class="badge dark">@_view.Category?.Name</span>
+                            <StockBadge Stock="_view.Stock" Reorder="_view.ReorderLevel" />
+                            @if (_view.IsArchived) { <span class="badge gray">Archived</span> }
+                        </div>
+                        <div class="dl">
+                            <div><span>Selling Price</span><b style="font-size:20px;color:var(--red)">@Fmt.Peso(_view.SellingPrice)</b></div>
+                            @if (Auth.Can(Perm.ViewCost))
+                            {
+                                <div><span>Cost / Profit per unit</span><b>@Fmt.Peso(_view.CostPrice) · @Fmt.Peso(_view.SellingPrice - _view.CostPrice)</b></div>
+                            }
+                            else { <div></div> }
+                            <div><span>Stock on Hand</span><b>@_view.Stock (reorder at @_view.ReorderLevel)</b></div>
+                            <div><span>Sold in last 30 days</span><b>@_viewSold units</b></div>
+                            <div><span>Brand</span><b>@(_view.Brand ?? "—")</b></div>
+                            <div><span>Last Sold</span><b>@Fmt.Date(_viewLastSold)</b></div>
+                            <div><span>Supplier</span><b>@(_view.Supplier?.Name ?? "—")</b></div>
+                            <div><span>Supplier Contact</span><b>@(_view.Supplier == null ? "—" : $"{_view.Supplier.ContactPerson} · {_view.Supplier.Phone}")</b></div>
+                        </div>
+                    </div>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(_view.Description))
+                {
+                    <div class="sec">Description</div>
+                    <p style="white-space:pre-line;color:var(--g700)">@_view.Description</p>
+                }
+                <div class="sec">Recent stock movements</div>
+                @if (_viewMoves.Count == 0)
+                {
+                    <p class="muted">No stock movements yet.</p>
+                }
+                else
+                {
+                    <table class="compact">
+                        <thead><tr><th>Date</th><th>Type</th><th class="r">Qty</th><th class="r">Stock After</th><th>Reference</th><th>By</th></tr></thead>
+                        <tbody>
+                            @foreach (var m in _viewMoves)
+                            {
+                                <tr>
+                                    <td class="nowrap">@Fmt.DateTimeText(m.Date)</td>
+                                    <td><MovementBadge Type="m.Type" /></td>
+                                    <td class="r mono b @(m.Quantity < 0 ? "t-red" : "t-green")">@(m.Quantity > 0 ? "+" : "")@m.Quantity</td>
+                                    <td class="r mono">@m.StockAfter</td>
+                                    <td class="mono">@m.Reference</td>
+                                    <td>@m.User?.FullName</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </ChildContent>
+            <Footer>
+                <button class="btn ghost" @onclick="() => _view = null">Close</button>
+                @if (!_view.IsArchived && Auth.Can(Perm.StockIn))
+                {
+                    <button class="btn ghost" @onclick="() => { _stockInFor = _view.Id; _view = null; }"><Icon Name="download" />Stock In</button>
+                }
+                @if (!_view.IsArchived && Auth.Can(Perm.ProductsManage))
+                {
+                    <button class="btn primary" @onclick="() => { var p = _view; _view = null; OpenForm(p); }"><Icon Name="edit" />Edit</button>
+                }
+            </Footer>
+        </Modal>
+    }
+
+    @if (_stockInFor != null)
+    {
+        <StockInDialog ProductId="_stockInFor" OnClose="() => _stockInFor = null" OnSaved="Load" />
+    }
+}
+
+@code {
+    protected override string? Permission => Perm.ProductsView;
+
+    [SupplyParameterFromQuery(Name = "q")] public string? SearchFromUrl { get; set; }
+    [SupplyParameterFromQuery(Name = "filter")] public string? FilterFromUrl { get; set; }
+    [SupplyParameterFromQuery(Name = "cat")] public int? CategoryFromUrl { get; set; }
+    [SupplyParameterFromQuery(Name = "supplier")] public int? SupplierFromUrl { get; set; }
+
+    private readonly ProductQuery _q = new();
+    private List<Product> _list = [];
+    private List<Category> _categories = [];
+    private List<Supplier> _suppliers = [];
+
+    private Product? _form;
+    private string? _formError;
+    private byte[]? _newImage;
+    private string? _newImagePreview;
+    private bool _removeImage;
+    private bool _busy;
+
+    private Product? _view;
+    private int _viewSold;
+    private DateTime? _viewLastSold;
+    private List<StockMovement> _viewMoves = [];
+
+    private int? _stockInFor;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Allowed) return;
+        _categories = await Catalog.GetCategoriesAsync();
+        _suppliers = await Catalog.GetSuppliersAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!Allowed) return;
+        // Coming from the global search box or a "low stock" link.
+        if (SearchFromUrl != null) _q.Search = SearchFromUrl;
+        if (FilterFromUrl == "low") _q.Stock = StockFilter.LowStock;
+        if (CategoryFromUrl.HasValue) _q.CategoryId = CategoryFromUrl;
+        _q.SupplierId = SupplierFromUrl;
+        await Load();
+    }
+
+    private async Task Load() => _list = await Catalog.GetProductsAsync(_q);
+
+    private string? PreviewUrl => _newImagePreview ?? (_removeImage ? null : ImageService.Url(_form?.ImageFile));
+
+    private void OpenForm(Product? p)
+    {
+        _formError = null;
+        _newImage = null;
+        _newImagePreview = null;
+        _removeImage = false;
+        _form = p == null
+            ? new Product { ReorderLevel = Settings.Current.DefaultReorderLevel, CategoryId = _q.CategoryId ?? 0 }
+            : new Product
+            {
+                Id = p.Id, Name = p.Name, Sku = p.Sku, Barcode = p.Barcode, Brand = p.Brand, CategoryId = p.CategoryId,
+                SupplierId = p.SupplierId, CostPrice = p.CostPrice, SellingPrice = p.SellingPrice, Stock = p.Stock,
+                ReorderLevel = p.ReorderLevel, Description = p.Description, ImageFile = p.ImageFile
+            };
+    }
+
+    private async Task OnImagePicked(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            var file = e.File;
+            if (file.Size > ImageService.MaxUploadBytes) { _formError = "That photo is too large (max 8 MB)."; return; }
+            using var ms = new MemoryStream();
+            await file.OpenReadStream(ImageService.MaxUploadBytes).CopyToAsync(ms);
+            _newImage = ms.ToArray();
+            _newImagePreview = $"data:{file.ContentType};base64,{Convert.ToBase64String(_newImage)}";
+            _removeImage = false;
+            _formError = null;
+        }
+        catch (Exception ex)
+        {
+            _formError = "Could not read that file: " + ex.Message;
+        }
+    }
+
+    private void RemoveImage()
+    {
+        _newImage = null;
+        _newImagePreview = null;
+        _removeImage = true;
+    }
+
+    private async Task Save()
+    {
+        if (_form == null) return;
+        _busy = true;
+        _formError = await Catalog.SaveProductAsync(_form, _newImage, _removeImage);
+        _busy = false;
+        if (_formError != null) return;
+        Toast.Success(_form.Id == 0 ? $"\"{_form.Name}\" was added." : $"\"{_form.Name}\" was updated.");
+        if (_form.SellingPrice < _form.CostPrice) Toast.Warning("Heads up: the selling price is lower than the cost.");
+        _form = null;
+        await Load();
+    }
+
+    private async Task Delete(Product p)
+    {
+        if (!await Confirm.Ask($"Delete \"{p.Name}\"?",
+                "If this product already has sales or stock history, it will be archived instead (hidden but kept for reports).", "Delete"))
+            return;
+        Toast.Info(await Catalog.DeleteOrArchiveProductAsync(p.Id));
+        await Load();
+    }
+
+    private async Task Restore(Product p)
+    {
+        await Catalog.RestoreProductAsync(p.Id);
+        Toast.Success($"\"{p.Name}\" was restored.");
+        await Load();
+    }
+
+    private async Task View(Product p)
+    {
+        _view = p;
+        (_viewSold, _viewLastSold) = await Catalog.GetSalesSummaryAsync(p.Id, 30);
+        _viewMoves = await Inventory.GetProductMovementsAsync(p.Id, 8);
+    }
+
+    private async Task ExportExcel()
+    {
+        var all = await Catalog.GetProductsAsync(new ProductQuery { Search = _q.Search, CategoryId = _q.CategoryId, Stock = _q.Stock, Sort = _q.Sort });
+        var path = await Export.SaveExcelAsync(ExportService.ProductList(all, Auth.Can(Perm.ViewCost)));
+        if (path != null) Toast.Success("Product list exported to Excel.");
+    }
+}
